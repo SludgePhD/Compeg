@@ -44,6 +44,8 @@ impl Gpu {
             features: Features::PUSH_CONSTANTS,
             limits: Limits {
                 max_push_constant_size: 16,
+                max_compute_workgroup_size_x: 1024,
+                max_compute_invocations_per_workgroup: 1024,
                 ..Default::default()
             },
             ..Default::default()

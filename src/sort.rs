@@ -11,19 +11,25 @@ use crate::{
 
 const PAD_WORKGROUP_SIZE: u32 = 64;
 const SORT_WORKGROUP_SIZE: u32 = 64;
+/// Number of elements presorted per workgroup. Also the final size of all presorted blocks.
+const PRESORT_ELEMS: u32 = 2048;
 
 pub struct Sorter {
     gpu: Arc<Gpu>,
     sort_pipeline: ComputePipeline,
     sort_bind_group: DynamicBindGroup,
-    pad_pipeline: ComputePipeline,
+    presort_pipeline: ComputePipeline,
 }
 
 impl Sorter {
     pub fn new(gpu: Arc<Gpu>) -> Self {
-        let shader = gpu.device.create_shader_module(ShaderModuleDescriptor {
+        let sort_shader = gpu.device.create_shader_module(ShaderModuleDescriptor {
             label: Some("sort_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("sort.wgsl").into()),
+        });
+        let presort_shader = gpu.device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("presort_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("presort.wgsl").into()),
         });
 
         let sort_bind_group_layout =
@@ -59,16 +65,26 @@ impl Sorter {
             .create_compute_pipeline(&ComputePipelineDescriptor {
                 label: Some("sort_pipeline"),
                 layout: Some(&sort_pipeline_layout),
-                module: &shader,
+                module: &sort_shader,
                 entry_point: "bitonic_sort",
             });
-        let pad_pipeline = gpu
+        let presort_pipeline = gpu
             .device
             .create_compute_pipeline(&ComputePipelineDescriptor {
-                label: Some("pad_pipeline"),
-                layout: Some(&sort_pipeline_layout),
-                module: &shader,
-                entry_point: "pad",
+                label: Some("presort_pipeline"),
+                layout: Some(
+                    &gpu.device
+                        .create_pipeline_layout(&PipelineLayoutDescriptor {
+                            label: Some("presort_pipeline_layout"),
+                            bind_group_layouts: &[&sort_bind_group_layout],
+                            push_constant_ranges: &[PushConstantRange {
+                                range: 0..4,
+                                stages: ShaderStages::COMPUTE,
+                            }],
+                        }),
+                ),
+                module: &presort_shader,
+                entry_point: "presort",
             });
 
         Self {
@@ -79,7 +95,7 @@ impl Sorter {
                 "sort_bind_group",
             ),
             gpu,
-            pad_pipeline,
+            presort_pipeline,
         }
     }
 
@@ -109,7 +125,7 @@ impl Sorter {
         // If the buffer doesn't have enough space for the padding elements, we have to
         // reallocate it.
         let num_elems_padded = num_elems.next_power_of_two();
-        let padding_elems = num_elems_padded - num_elems;
+        //let padding_elems = num_elems_padded - num_elems;
         data.reserve(u64::from(num_elems_padded) * 4);
 
         let bind_group = self.sort_bind_group.bind_group(&[data.as_resource()]);
@@ -117,18 +133,15 @@ impl Sorter {
         let mut compute = enc.begin_compute_pass(&ComputePassDescriptor::default());
         compute.set_bind_group(0, bind_group, &[]);
 
-        if padding_elems > 0 {
-            compute.set_pipeline(&self.pad_pipeline);
-            compute.set_push_constants(0, bytemuck::bytes_of(&[num_elems, 0, 0]));
+        compute.set_pipeline(&self.presort_pipeline);
+        compute.set_push_constants(0, bytemuck::bytes_of(&[num_elems]));
+        let workgroups = (num_elems_padded + PRESORT_ELEMS - 1) / PRESORT_ELEMS;
+        log::trace!("presort: num_elems={num_elems}, num_elems_padded={num_elems_padded}, workgroups={workgroups}");
+        compute.dispatch_workgroups(workgroups, 1, 1);
 
-            let workgroups = (padding_elems + PAD_WORKGROUP_SIZE - 1) / PAD_WORKGROUP_SIZE;
-            log::trace!(
-                "adding {} element(s) of padding starting at element {} with {} workgroups",
-                padding_elems,
-                num_elems,
-                workgroups,
-            );
-            compute.dispatch_workgroups(workgroups, 1, 1);
+        if workgroups == 1 {
+            // For few enough elements, we're already done.
+            return;
         }
 
         compute.set_pipeline(&self.sort_pipeline);
@@ -138,7 +151,10 @@ impl Sorter {
             (num_elems_padded + SORT_WORKGROUP_SIZE - 1) / SORT_WORKGROUP_SIZE;
         assert!(num_workgroups_per_iteration > 0);
 
-        for k in iter::successors(Some(2), |k| Some(k * 2)).take_while(|&k| k <= num_elems_padded) {
+        let mut passes = 0;
+        for k in iter::successors(Some(PRESORT_ELEMS), |k| Some(k * 2))
+            .take_while(|&k| k <= num_elems_padded)
+        {
             for j in iter::successors(Some(k >> 1), |k| Some(k >> 1)).take_while(|&j| j > 0) {
                 log::trace!(
                     "scheduling sorting pass num_elems_padded={num_elems_padded} k={k} j={j} workgroups={}",
@@ -146,8 +162,10 @@ impl Sorter {
                 );
                 compute.set_push_constants(0, bytemuck::bytes_of(&[num_elems_padded, k, j]));
                 compute.dispatch_workgroups(num_workgroups_per_iteration, 1, 1);
+                passes += 1;
             }
         }
+        log::trace!("total passes: {passes}");
     }
 }
 
@@ -159,6 +177,12 @@ mod tests {
 
     #[track_caller]
     fn check(unsorted: &[u32]) {
+        env_logger::builder()
+            .filter_module(env!("CARGO_PKG_NAME"), log::LevelFilter::Trace)
+            .parse_default_env()
+            .try_init()
+            .ok();
+
         let gpu = Arc::new(pollster::block_on(crate::Gpu::open()).unwrap());
         let mut sorter = Sorter::new(gpu.clone());
         let mut dbuf = DynamicBuffer::new(
@@ -203,6 +227,7 @@ mod tests {
         check(&[0, 1, 2]);
         check(&[0, 1, 2, 3]);
         check(&[42; 1023]);
+        check(&[42; 5000]);
     }
 
     #[test]
@@ -220,5 +245,20 @@ mod tests {
 
         let v = (0..16000).rev().collect::<Vec<_>>();
         check(&v);
+    }
+
+    #[test]
+    fn random() {
+        let mut rng = fastrand::Rng::new();
+        rng.seed(0x6456346456734555);
+        rng.f64();
+        rng.f64();
+
+        for _ in 0..16 {
+            let v: Vec<_> = (0..rng.usize(10000..=50000))
+                .map(|_| fastrand::u32(..))
+                .collect();
+            check(&v);
+        }
     }
 }

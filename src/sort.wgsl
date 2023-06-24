@@ -1,3 +1,4 @@
+// Invariant: length is a power-of-two.
 @group(0) @binding(0) var<storage, read_write> elements: array<u32>;
 
 struct PushParams {
@@ -10,18 +11,6 @@ struct PushParams {
 
 var<push_constant> params: PushParams;
 // NB: multiple `var<push_constant>` declarations cause a segfault
-
-// Pads the input array to contain a power of two of elements rather than just `n_elems`.
-@compute
-@workgroup_size(64)
-fn pad(
-    @builtin(global_invocation_id) id: vec3<u32>,
-) {
-    let index = params.n_elems + id.x;
-    if index < arrayLength(&elements) {
-        elements[index] = 0xffffffffu;
-    }
-}
 
 @compute
 @workgroup_size(64)
