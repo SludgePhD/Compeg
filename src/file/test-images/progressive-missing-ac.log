@@ -1,0 +1,7 @@
+0000 Soi
+0002 Other { marker: 224, data: [74, 70, 73, 70, 0, 1, 1, 1, 0, 72, 0, 72, 0, 0] }
+0014 Dqt(Dqt([QuantizationTable { Pq: 0, Tq: 0, Qk: [3, 2, 2, 3, 2, 2, 3, 3, 3, 3, 4, 3, 3, 4, 5, 8, 5, 5, 4, 4, 5, 10, 7, 7, 6, 8, 12, 10, 12, 12, 11, 10, 11, 11, 13, 14, 18, 16, 13, 14, 17, 14, 11, 11, 16, 22, 16, 17, 19, 20, 21, 21, 21, 12, 15, 23, 24, 22, 20, 24, 18, 20, 21, 20] }]))
+0059 Sof(Sof { sof: SOF2, P: 8, Y: 8, X: 8, components: [FrameComponent { Ci: 1, Hi: 1, Vi: 1, Tqi: 0 }] })
+0066 Dht(Dht { tables: [HuffmanTable { Tc: 0, Th: 0, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [8] }] })
+007C Sos(Sos { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }], Ss: 0, Se: 0, Ah: 0, Al: 1, data: [84, 255, 0] })
+0089 Eoi

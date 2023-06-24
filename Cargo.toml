@@ -1,0 +1,16 @@
+[package]
+name = "compeg"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wgpu = "0.16.1"
+bytemuck = { version = "1.13.1", features = ["derive", "min_const_generics"] }
+log = "0.4.19"
+
+[dev-dependencies]
+expect-test = "1.4.1"
+winit = "0.28.6"
+env_logger = "0.10.0"
+anyhow = "1.0.71"
+pollster = "0.3.0"
