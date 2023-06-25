@@ -5,7 +5,7 @@ use expect_test::{expect_file, ExpectFile};
 use super::JpegParser;
 
 fn check(filename: &str, expect: ExpectFile) {
-    let bytes = std::fs::read(format!("src/jpeg/test-images/{filename}")).unwrap();
+    let bytes = std::fs::read(format!("src/file/test-images/{filename}")).unwrap();
     println!("checking {filename}");
     let mut parser = JpegParser::new(&bytes);
 
@@ -23,7 +23,7 @@ fn reftests() {
 }
 
 fn do_reftests() -> Result<(), Box<dyn Error>> {
-    for entry in fs::read_dir("src/jpeg/test-images")? {
+    for entry in fs::read_dir("src/file/test-images")? {
         let entry = entry?;
         let path = entry.path();
         let stem = path.file_stem().unwrap().to_str().unwrap();

@@ -395,6 +395,7 @@ pub struct Dri {
 }
 
 impl Dri {
+    /// Returns the number of MCUs contained in each restart interval.
     #[inline]
     pub fn Ri(&self) -> u16 {
         self.Ri
@@ -438,7 +439,7 @@ impl<'a> Sof<'a> {
     }
 
     #[inline]
-    pub fn components(&self) -> &[FrameComponent] {
+    pub fn components(&self) -> &'a [FrameComponent] {
         self.components
     }
 }
@@ -448,9 +449,15 @@ pub struct SofMarker(u8);
 
 impl fmt::Debug for SofMarker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("SofMarker")
-            .field(&format_args!("{:02x}", self.0))
-            .finish()
+        match *self {
+            Self::SOF0 => f.write_str("SOF0"),
+            Self::SOF1 => f.write_str("SOF1"),
+            Self::SOF2 => f.write_str("SOF2"),
+            _ => f
+                .debug_tuple("SofMarker")
+                .field(&format_args!("{:02x}", self.0))
+                .finish(),
+        }
     }
 }
 
@@ -458,7 +465,7 @@ impl fmt::Debug for SofMarker {
 impl SofMarker {
     /// Baseline DCT.
     ///
-    /// This is the *only* type of image that VA-API supports.
+    /// This is the *only* type of image that we support.
     pub const SOF0: Self = Self(0xC0);
     /// Extended Sequential DCT.
     pub const SOF1: Self = Self(0xC1);
