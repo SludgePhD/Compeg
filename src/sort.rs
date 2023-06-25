@@ -9,15 +9,20 @@ use crate::{
     Gpu,
 };
 
-const PAD_WORKGROUP_SIZE: u32 = 64;
-const SORT_WORKGROUP_SIZE: u32 = 64;
 /// Number of elements presorted per workgroup. Also the final size of all presorted blocks.
 const PRESORT_ELEMS: u32 = 2048;
+/// Number of elements sorted by one `bitonic_sort` workgroup.
+const SORT_ELEMS: u32 = 2048;
+/// Elements sorted by a "small j sort" shader workgroup.
+const SMALL_SORT_ELEMS: u32 = 2048;
+/// Highest value of `j` supported by the "small j sort" shader.
+const SMALL_SORT_MAX_J: u32 = 1024;
 
 pub struct Sorter {
     gpu: Arc<Gpu>,
-    sort_pipeline: ComputePipeline,
     sort_bind_group: DynamicBindGroup,
+    sort_pipeline: ComputePipeline,
+    small_sort_pipeline: ComputePipeline,
     presort_pipeline: ComputePipeline,
 }
 
@@ -26,10 +31,6 @@ impl Sorter {
         let sort_shader = gpu.device.create_shader_module(ShaderModuleDescriptor {
             label: Some("sort_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("sort.wgsl").into()),
-        });
-        let presort_shader = gpu.device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("presort_shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("presort.wgsl").into()),
         });
 
         let sort_bind_group_layout =
@@ -68,33 +69,32 @@ impl Sorter {
                 module: &sort_shader,
                 entry_point: "bitonic_sort",
             });
+        let small_sort_pipeline = gpu
+            .device
+            .create_compute_pipeline(&ComputePipelineDescriptor {
+                label: Some("small_sort_pipeline"),
+                layout: Some(&sort_pipeline_layout),
+                module: &sort_shader,
+                entry_point: "sort_small_j",
+            });
         let presort_pipeline = gpu
             .device
             .create_compute_pipeline(&ComputePipelineDescriptor {
                 label: Some("presort_pipeline"),
-                layout: Some(
-                    &gpu.device
-                        .create_pipeline_layout(&PipelineLayoutDescriptor {
-                            label: Some("presort_pipeline_layout"),
-                            bind_group_layouts: &[&sort_bind_group_layout],
-                            push_constant_ranges: &[PushConstantRange {
-                                range: 0..4,
-                                stages: ShaderStages::COMPUTE,
-                            }],
-                        }),
-                ),
-                module: &presort_shader,
+                layout: Some(&sort_pipeline_layout),
+                module: &sort_shader,
                 entry_point: "presort",
             });
 
         Self {
-            sort_pipeline,
             sort_bind_group: DynamicBindGroup::new(
                 gpu.clone(),
                 sort_bind_group_layout.into(),
                 "sort_bind_group",
             ),
             gpu,
+            sort_pipeline,
+            small_sort_pipeline,
             presort_pipeline,
         }
     }
@@ -134,7 +134,7 @@ impl Sorter {
         compute.set_bind_group(0, bind_group, &[]);
 
         compute.set_pipeline(&self.presort_pipeline);
-        compute.set_push_constants(0, bytemuck::bytes_of(&[num_elems]));
+        compute.set_push_constants(0, bytemuck::bytes_of(&[num_elems, 0, 0]));
         let workgroups = (num_elems_padded + PRESORT_ELEMS - 1) / PRESORT_ELEMS;
         log::trace!("presort: num_elems={num_elems}, num_elems_padded={num_elems_padded}, workgroups={workgroups}");
         compute.dispatch_workgroups(workgroups, 1, 1);
@@ -144,28 +144,43 @@ impl Sorter {
             return;
         }
 
-        compute.set_pipeline(&self.sort_pipeline);
-
         // We process some elements per workgroup and need to process N per iteration.
-        let num_workgroups_per_iteration =
-            (num_elems_padded + SORT_WORKGROUP_SIZE - 1) / SORT_WORKGROUP_SIZE;
+        let num_workgroups_per_iteration = (num_elems_padded + SORT_ELEMS - 1) / SORT_ELEMS;
         assert!(num_workgroups_per_iteration > 0);
+        let num_workgroups_per_small_iteration =
+            (num_elems_padded + SMALL_SORT_ELEMS - 1) / SMALL_SORT_ELEMS;
+        assert!(num_workgroups_per_small_iteration > 0);
 
-        let mut passes = 0;
-        for k in iter::successors(Some(PRESORT_ELEMS), |k| Some(k * 2))
+        let mut normal_passes = 0;
+        let mut small_passes = 0;
+        for k in iter::successors(Some(PRESORT_ELEMS * 2), |k| Some(k * 2))
             .take_while(|&k| k <= num_elems_padded)
         {
             for j in iter::successors(Some(k >> 1), |k| Some(k >> 1)).take_while(|&j| j > 0) {
-                log::trace!(
-                    "scheduling sorting pass num_elems_padded={num_elems_padded} k={k} j={j} workgroups={}",
-                    num_workgroups_per_iteration,
-                );
-                compute.set_push_constants(0, bytemuck::bytes_of(&[num_elems_padded, k, j]));
-                compute.dispatch_workgroups(num_workgroups_per_iteration, 1, 1);
-                passes += 1;
+                if j == SMALL_SORT_MAX_J {
+                    log::trace!(
+                        "scheduling small sorting pass num_elems_padded={num_elems_padded} k={k} j={j} workgroups={}",
+                        num_workgroups_per_small_iteration,
+                    );
+                    compute.set_pipeline(&self.small_sort_pipeline);
+                    compute.set_push_constants(0, bytemuck::bytes_of(&[num_elems_padded, k, j]));
+                    compute.dispatch_workgroups(num_workgroups_per_small_iteration, 1, 1);
+                    small_passes += 1;
+                    // A single pass does all the remaining `j` iterations.
+                    break;
+                } else {
+                    log::trace!(
+                        "scheduling sorting pass num_elems_padded={num_elems_padded} k={k} j={j} workgroups={}",
+                        num_workgroups_per_iteration,
+                    );
+                    compute.set_pipeline(&self.sort_pipeline);
+                    compute.set_push_constants(0, bytemuck::bytes_of(&[num_elems_padded, k, j]));
+                    compute.dispatch_workgroups(num_workgroups_per_iteration, 1, 1);
+                    normal_passes += 1;
+                }
             }
         }
-        log::trace!("total passes: {passes}");
+        log::trace!("total passes: {normal_passes} + {small_passes}");
     }
 }
 
