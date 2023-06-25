@@ -11,6 +11,14 @@ struct QTable {
     values: array<u32, 64>,   // 64 bytes, zero-padded
 };
 
+struct Component {
+    vsample: u32,
+    hsample: u32,
+    qtable: u32,
+    dchuff: u32,
+    achuff: u32,
+}
+
 struct Metadata {
     dhts: array<DhtSlot, 2>,
     qtables: array<QTable, 4>,
@@ -18,9 +26,7 @@ struct Metadata {
     restart_interval: u32,
     width: u32,
     height: u32,
-    component_qtables: array<u32, 3>,
-    component_dchuff: array<u32, 3>,
-    component_achuff: array<u32, 3>,
+    components: array<Component, 3>,
     start_position_count: atomic<u32>,
 };
 
@@ -58,7 +64,9 @@ fn push_start_position(pos: u32) {
     }
 }
 
-// "minor" problem: result isn't actually ordered, but I need it to be ordered
+// "Minor" problem: result isn't actually ordered, but we need it to be ordered so that the index
+// tells us the part of the output texture to write to.
+// That's why the whole sorting module and shader exists.
 @compute
 @workgroup_size(64)
 fn compute_start_positions(
@@ -111,15 +119,16 @@ fn huffman_decode(
         return;
     }
 
-    let x = id.x % metadata.width;
-    let y = id.x / metadata.width;
-    textureStore(out, vec2(x, y), vec4(vec3(id.x), 255u));
-    /* TEST */
-
-    /*var scan_data_byte_index = start_positions[id.x];
+    var scan_data_byte_index = start_positions[id.x];
 
     for (var i = 0u; i < metadata.restart_interval; i++) {
-        // This loop decodes 1 MCU.
-        var decoded = array<i32, 64>();
-    }*/
+        for (var comp = 0u; comp < 3u; comp++) {
+            for (var v_samp = 0u; v_samp < metadata.components[comp].vsample; v_samp++) {
+                for (var h_samp = 0u; h_samp < metadata.components[comp].hsample; h_samp++) {
+                    var decoded = array<i32, 64>();
+
+                }
+            }
+        }
+    }
 }

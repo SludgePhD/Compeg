@@ -1,6 +1,7 @@
 mod dynamic;
 mod error;
 mod file;
+mod huffman;
 mod metadata;
 mod sort;
 
@@ -331,25 +332,28 @@ impl Decoder {
         self.gpu.device.poll(MaintainBase::Wait);
         let t_sort = start.elapsed();
 
-        /*let invocs: u32 = self.start_positions.len().try_into().unwrap();
+        let mut enc = self
+            .gpu
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor::default());
+
+        let mut compute = enc.begin_compute_pass(&ComputePassDescriptor::default());
+        let invocs: u32 = self.start_positions.len().try_into().unwrap();
         let workgroups = (invocs + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
         if workgroups > 65535 {
             panic!("restart interval count {invocs} exceeds maximum of 65535*{WORKGROUP_SIZE}");
         }
+        compute.set_bind_group(0, bind_group, &[]);
         compute.set_pipeline(&self.gpu.huffman_decode_pipeline);
         compute.dispatch_workgroups(workgroups.into(), 1, 1);
+        drop(compute);
 
         log::trace!(
             "dispatching {} workgroups ({} shader invocations; {} restart intervals)",
             workgroups,
             workgroups * WORKGROUP_SIZE,
             self.start_positions.len(),
-        );*/
-
-        let mut enc = self
-            .gpu
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor::default());
+        );
 
         self.start_positions_staging_buffer
             .download(&self.start_positions_buffer, &mut enc);
@@ -450,8 +454,8 @@ impl<'a> ImageData<'a> {
         let mut hufftables = [DhtSlot::DEFAULT_LUMINANCE, DhtSlot::DEFAULT_CHROMINANCE];
         let mut qtables = [QTable::zeroed(); 4];
         let mut scan_data = None;
+        let mut components = None;
         let mut component_indices = None;
-        let mut component_qtables = [0; 3];
         let mut component_dchuff = [0; 3];
         let mut component_achuff = [0; 3];
 
@@ -481,8 +485,6 @@ impl<'a> ImageData<'a> {
                             if y.Tqi() > 3 || u.Tqi() > 3 || v.Tqi() > 3 {
                                 bail!("invalid quantization table selection [{},{},{}] (only tables 0-3 are valid)", y.Tqi(), u.Tqi(), v.Tqi());
                             }
-                            component_qtables = [y.Tqi(), u.Tqi(), v.Tqi()];
-
                             if y.Hi() != 2 || y.Vi() != 1 {
                                 bail!(
                                     "invalid sampling factors {}x{} for Y component (expected 2x1)",
@@ -501,6 +503,8 @@ impl<'a> ImageData<'a> {
                             }
 
                             component_indices = Some([y.Ci(), u.Ci(), v.Ci()]);
+
+                            components = Some([y, u, v]);
                         }
                         _ => {
                             bail!("frame with {} components not supported (only 3 components are supported)", sof.components().len());
@@ -599,7 +603,7 @@ impl<'a> ImageData<'a> {
             }
         }
 
-        let (Some((width, height)), Some(ri), Some((scan_data_offset, scan_data_len))) = (size, ri ,scan_data) else {
+        let (Some((width, height)), Some(components), Some(ri), Some((scan_data_offset, scan_data_len))) = (size, components, ri, scan_data) else {
             bail!("missing DRI/SOS/SOI marker");
         };
 
@@ -609,10 +613,14 @@ impl<'a> ImageData<'a> {
             restart_interval: ri,
             qtables,
             dhts: hufftables,
-            component_qtables: component_qtables.map(u32::from),
-            component_dchuff: component_dchuff.map(u32::from),
-            component_achuff: component_achuff.map(u32::from),
-            start_position_count: 1,
+            components: [0, 1, 2].map(|i| metadata::Component {
+                hsample: components[i].Hi().into(),
+                vsample: components[i].Vi().into(),
+                qtable: components[i].Tqi().into(),
+                dchuff: component_dchuff[i].into(),
+                achuff: component_achuff[i].into(),
+            }),
+            start_position_count: 1, // first start pos is always 0
         };
 
         Ok(Self {
