@@ -36,16 +36,13 @@ impl TableData {
 
 impl fmt::Debug for TableData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for &(code, lookup) in &self.codes {
+        for (i, &(code, lookup)) in self.codes.iter().enumerate() {
+            if i != 0 {
+                writeln!(f)?;
+            }
             let bits = lookup.bits;
             let value = lookup.value;
-            writeln!(
-                f,
-                "{bits} {:01$b} -> {2:02x}",
-                code,
-                usize::from(bits),
-                value,
-            )?;
+            write!(f, "{:01$b} -> {2:02x}", code, usize::from(bits), value)?;
         }
         Ok(())
     }
@@ -79,19 +76,18 @@ mod tests {
 
         let tbl = TableData::build(&num_dc_codes, &dc_values);
         expect_test::expect![[r#"
-            2 00 -> 00
-            3 010 -> 01
-            3 011 -> 02
-            3 100 -> 03
-            3 101 -> 04
-            3 110 -> 05
-            4 1110 -> 06
-            5 11110 -> 07
-            6 111110 -> 08
-            7 1111110 -> 09
-            8 11111110 -> 0a
-            9 111111110 -> 0b
-
+            00 -> 00
+            010 -> 01
+            011 -> 02
+            100 -> 03
+            101 -> 04
+            110 -> 05
+            1110 -> 06
+            11110 -> 07
+            111110 -> 08
+            1111110 -> 09
+            11111110 -> 0a
+            111111110 -> 0b
         "#]]
         .assert_debug_eq(&tbl);
     }
