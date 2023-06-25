@@ -1,92 +1,69 @@
 use core::fmt;
 
 pub struct TableData {
-    /// Stores the encoded bits in the lowest k bits of the word.
-    code_table: Vec<u16>,
-    codes: Vec<u8>,
+    codes: Vec<(u16, LookupResult)>,
 }
 
 impl TableData {
     #[allow(dead_code)]
     pub fn build(num_codes_per_length: &[u8; 16], codes: &[u8]) -> Self {
-        let mut size_table = generate_size_table(&num_codes_per_length);
-        let code_table = generate_code_table(&size_table);
-        assert_eq!(size_table.pop(), Some(0)); // remote 0-termination
-        assert_eq!(size_table.len(), code_table.len());
-        assert_eq!(code_table.len(), codes.len());
+        // First, generate all huffman codes from the inputs.
+        let mut out = Vec::new();
 
-        Self {
-            code_table,
-            codes: codes.to_vec(),
+        // The following is similar in function to the flowcharts in Annex C
+        // (`Generate_size_table` and `Generate_code_table`)
+        let mut next_code = 0;
+        let mut code_iter = codes.iter();
+        for (code_length, &code_count) in num_codes_per_length.iter().enumerate() {
+            let code_length = (code_length + 1) as u8; // 1-based
+
+            next_code <<= 1;
+
+            for _ in 0..code_count {
+                let lookup_result = LookupResult::new(code_length, *code_iter.next().unwrap());
+                out.push((next_code, lookup_result));
+                next_code += 1;
+            }
         }
+
+        // We now have a list of all huffman codes, stored in the least significant bits of the
+        // `u16` in `out`. In order to decode them quickly, we need to produce all possible prefixes
+        // for each code to fill a 16-bit lookup table with.
+
+        Self { codes: out }
     }
 }
 
 impl fmt::Debug for TableData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (&code, &out) in self.code_table.iter().zip(&self.codes) {
-            writeln!(f, "{:b} -> {:02x}", code, out)?;
+        for &(code, lookup) in &self.codes {
+            let bits = lookup.bits;
+            let value = lookup.value;
+            writeln!(
+                f,
+                "{bits} {:01$b} -> {2:02x}",
+                code,
+                usize::from(bits),
+                value,
+            )?;
         }
         Ok(())
     }
 }
 
-fn generate_size_table(bits: &[u8; 16]) -> Vec<u8> {
-    let codes = bits.iter().map(|&v| usize::from(v)).sum::<usize>();
-
-    let mut huffsize = vec![0; codes + 1]; // space for zero-terminator
-
-    let mut k = 0;
-    let mut i = 1;
-    let mut j = 1;
-    loop {
-        if i == 16 || j > bits[i] {
-            i += 1;
-            j = 1;
-            if i > 16 {
-                huffsize[k] = 0; // zero-terminated list
-                break;
-            }
-        } else {
-            huffsize[k] = i as u8;
-            k += 1;
-            j += 1;
-        }
-    }
-
-    assert_eq!(k as usize, codes);
-    huffsize
-}
-
-fn generate_code_table(huffsize: &[u8]) -> Vec<u16> {
-    let mut huffcode = vec![0; huffsize.len() - 1];
-
-    let mut k = 0;
-    let mut code = 0;
-    let mut si = huffsize[0];
-    loop {
-        huffcode[k] = code;
-        code += 1;
-        k += 1;
-
-        if huffsize[k] != si {
-            if huffsize[k] == 0 {
-                // list is zero-terminated
-                break;
-            }
-
-            while huffsize[k] != si {
-                code <<= 1;
-                si += 1;
-            }
-        }
-    }
-
-    huffcode
-}
-
 #[derive(Clone, Copy)]
-struct LookupResult(u8);
+struct LookupResult {
+    /// Length of the huffman code in bits (number of bits that need to be consumed from the input).
+    bits: u8,
+    /// Decoded value. Meaning depends on table class (AC/DC).
+    value: u8,
+}
+
+impl LookupResult {
+    fn new(bits: u8, value: u8) -> Self {
+        Self { bits, value }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -102,18 +79,18 @@ mod tests {
 
         let tbl = TableData::build(&num_dc_codes, &dc_values);
         expect_test::expect![[r#"
-            0 -> 00
-            10 -> 01
-            11 -> 02
-            100 -> 03
-            101 -> 04
-            110 -> 05
-            1110 -> 06
-            11110 -> 07
-            111110 -> 08
-            1111110 -> 09
-            11111110 -> 0a
-            111111110 -> 0b
+            2 00 -> 00
+            3 010 -> 01
+            3 011 -> 02
+            3 100 -> 03
+            3 101 -> 04
+            3 110 -> 05
+            4 1110 -> 06
+            5 11110 -> 07
+            6 111110 -> 08
+            7 1111110 -> 09
+            8 11111110 -> 0a
+            9 111111110 -> 0b
 
         "#]]
         .assert_debug_eq(&tbl);
