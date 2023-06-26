@@ -1,15 +1,8 @@
 // Most of these `u32`s are actually just single bytes, but WGSL doesn't support that data type.
 
-struct DhtSlot {
-    num_dc_codes: array<u32, 16>,  // 16 bytes
-    dc: array<u32, 12>,            // 12 bytes
-    num_ac_codes: array<u32, 16>,  // 16 bytes
-    ac: array<u32, 162>,           // 162 bytes, zero-padded
-};
-
 struct QTable {
     values: array<u32, 64>,   // 64 bytes, zero-padded
-};
+}
 
 struct Component {
     vsample: u32,
@@ -20,7 +13,6 @@ struct Component {
 }
 
 struct Metadata {
-    dhts: array<DhtSlot, 2>,
     qtables: array<QTable, 4>,
     // Ri – number of MCUs per restart interval
     restart_interval: u32,
@@ -28,7 +20,12 @@ struct Metadata {
     height: u32,
     components: array<Component, 3>,
     start_position_count: atomic<u32>,
-};
+}
+
+struct HuffmanTable {
+    // 2 16-bit entries each
+    lut: array<u32, 32768>,
+}
 
 @group(0) @binding(0) var<storage, read_write> metadata: Metadata;
 
@@ -43,6 +40,8 @@ struct Metadata {
 
 @group(0) @binding(4) var<storage, read_write> debug: array<u32>;
 
+// 2 slots, 2 classes (DC=0,AC=1)
+@group(0) @binding(5) var<storage, read> huffman_luts: array<HuffmanTable, 4>;
 
 /// Extracts the byte at `index` (0-3) from `word`.
 fn extractbyte(word: u32, index: u32) -> u32 {
@@ -121,14 +120,46 @@ fn huffman_decode(
 
     var scan_data_byte_index = start_positions[id.x];
 
+    /*TEST*/
+    let word = scan_data[scan_data_byte_index / 4u];
+    let res = huffman_decode_(word, metadata.components[0].dchuff, 0u);
+    if id.x < arrayLength(&debug) {
+        debug[id.x * 2u] = word;
+        debug[id.x * 2u + 1u] = res;
+    }
+    /*TEST*/
+
     for (var i = 0u; i < metadata.restart_interval; i++) {
+        // Decode 1 MCU.
+        // Each MCU contains data units for each component in order, with components that have a
+        // sampling factor >1 storing several data units in sequence.
+
         for (var comp = 0u; comp < 3u; comp++) {
             for (var v_samp = 0u; v_samp < metadata.components[comp].vsample; v_samp++) {
                 for (var h_samp = 0u; h_samp < metadata.components[comp].hsample; h_samp++) {
+                    // Decode 1 data unit.
                     var decoded = array<i32, 64>();
 
                 }
             }
         }
     }
+}
+
+struct HuffmanDecodeResult {
+    bits: u32,  // number of input bits consumed (0-16)
+    value: u32, // 8-bit decoded value
+}
+
+fn huffman_decode_(
+    word: u32, // 16-bit word, with the to-be-decoded huffman code in the most significant 16 bits
+    slot: u32, // huffman table index (0 or 1)
+    tclass: u32, // huffman table class (DC=0, AC=1)
+) -> u32 {
+    let index = slot << 1u | tclass;
+    var entry = huffman_luts[index].lut[word >> 17u];
+
+    // LSB order, so the low half stores the first entry
+    entry = (entry >> ((word & 1u) * 16u)) & 0xffffu;
+    return entry;
 }

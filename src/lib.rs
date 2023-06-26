@@ -22,7 +22,8 @@ use wgpu::*;
 use crate::{
     dynamic::{DynamicBuffer, DynamicTexture},
     file::SofMarker,
-    metadata::{DhtSlot, QTable},
+    huffman::{HuffmanTables, TableData},
+    metadata::QTable,
 };
 
 const OUTPUT_FORMAT: TextureFormat = TextureFormat::Rgba8Uint;
@@ -136,6 +137,17 @@ impl Gpu {
                         },
                         count: None,
                     },
+                    // `huffman_luts`
+                    BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
         let shared_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -176,6 +188,7 @@ pub struct Decoder {
     sorter: Sorter,
     metadata: Buffer,
     metadata_staging: Buffer,
+    huffman_tables: Buffer,
     debug: Buffer,
     debug_staging: Buffer,
     /// Holds all the scan data of the JPEG (including all embedded RST markers). This constitutes
@@ -200,6 +213,12 @@ impl Decoder {
             label: Some("metadata_staging"),
             size: metadata.size(),
             usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let huffman_tables = gpu.device.create_buffer(&BufferDescriptor {
+            label: Some("huffman_tables"),
+            size: HuffmanTables::TOTAL_SIZE as u64,
+            usage: BufferUsages::COPY_DST | BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
         let debug = gpu.device.create_buffer(&BufferDescriptor {
@@ -247,6 +266,7 @@ impl Decoder {
             gpu,
             metadata,
             metadata_staging,
+            huffman_tables,
             debug,
             debug_staging,
             scan_data,
@@ -275,6 +295,12 @@ impl Decoder {
             self.start_positions_buffer.write(&[0u32]);
         });
 
+        self.gpu.queue.write_buffer(
+            &self.huffman_tables,
+            0,
+            bytemuck::bytes_of(data.huffman_tables.raw()),
+        );
+
         let start = Instant::now();
         let mut enc = self
             .gpu
@@ -288,6 +314,7 @@ impl Decoder {
             self.start_positions_buffer.as_resource(),
             self.output.as_resource(),
             self.debug.as_entire_binding().into(),
+            self.huffman_tables.as_entire_binding().into(),
         ]);
         compute.set_bind_group(0, bind_group, &[]);
 
@@ -369,10 +396,8 @@ impl Decoder {
         let t_poll = time(|| self.gpu.device.poll(MaintainBase::Wait));
 
         let range = self.debug_staging.slice(..).get_mapped_range();
-        let mut word = [0; 4];
-        word.copy_from_slice(&range[..4]);
-        let word = u32::from_le_bytes(word);
-        log::debug!("debug word = 0x{:08x}", word);
+        let words: &[u32] = bytemuck::cast_slice(&range);
+        log::debug!("debug = {:08x?}", words);
         drop(range);
         self.debug_staging.unmap();
 
@@ -425,6 +450,7 @@ fn time<R>(f: impl FnOnce() -> R) -> Duration {
 /// A parsed JPEG image, containing all data needed for on-GPU decoding.
 pub struct ImageData<'a> {
     metadata: metadata::Metadata,
+    huffman_tables: HuffmanTables,
     jpeg: Cow<'a, [u8]>,
     scan_data_offset: usize,
     scan_data_len: usize,
@@ -451,7 +477,7 @@ impl<'a> ImageData<'a> {
 
         let mut size = None;
         let mut ri = None;
-        let mut hufftables = [DhtSlot::DEFAULT_LUMINANCE, DhtSlot::DEFAULT_CHROMINANCE];
+        let mut huffman_tables = HuffmanTables::new();
         let mut qtables = [QTable::zeroed(); 4];
         let mut scan_data = None;
         let mut components = None;
@@ -547,22 +573,14 @@ impl<'a> ImageData<'a> {
                             );
                         }
 
-                        let slot = &mut hufftables[usize::from(index)];
-                        match table.Tc() {
-                            0 => {
-                                slot.num_dc_codes = table.Li().map(u32::from);
-                                for (dest, src) in slot.dc.iter_mut().zip(table.Vij()) {
-                                    *dest = u32::from(*src);
-                                }
-                            }
-                            1 => {
-                                slot.num_ac_codes = table.Li().map(u32::from);
-                                for (dest, src) in slot.ac.iter_mut().zip(table.Vij()) {
-                                    *dest = u32::from(*src);
-                                }
-                            }
+                        let class = match table.Tc() {
+                            class @ (0 | 1) => class,
                             err => bail!("invalid table class Tc={err} (only 0 and 1 are valid)"),
-                        }
+                        };
+
+                        let index = (index << 1) | class;
+                        let data = TableData::build(table.Li(), table.Vij());
+                        huffman_tables.set(index, &data);
                     }
                 }
                 SegmentKind::Dri(dri) => {
@@ -612,7 +630,6 @@ impl<'a> ImageData<'a> {
             height: height.into(),
             restart_interval: ri,
             qtables,
-            dhts: hufftables,
             components: [0, 1, 2].map(|i| metadata::Component {
                 hsample: components[i].Hi().into(),
                 vsample: components[i].Vi().into(),
@@ -625,6 +642,7 @@ impl<'a> ImageData<'a> {
 
         Ok(Self {
             metadata,
+            huffman_tables,
             jpeg,
             scan_data_offset,
             scan_data_len,
