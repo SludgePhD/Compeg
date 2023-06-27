@@ -635,8 +635,8 @@ impl<'a> ImageData<'a> {
                 hsample: components[i].Hi().into(),
                 vsample: components[i].Vi().into(),
                 qtable: components[i].Tqi().into(),
-                dchuff: component_dchuff[i].into(),
-                achuff: component_achuff[i].into(),
+                dchuff: u32::from(component_dchuff[i] << 1),
+                achuff: u32::from((component_achuff[i] << 1) | 1),
             }),
             start_position_count: 1, // first start pos is always 0
         };

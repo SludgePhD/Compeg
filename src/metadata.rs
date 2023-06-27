@@ -12,7 +12,9 @@ pub struct Component {
     pub vsample: u32,
     pub hsample: u32,
     pub qtable: u32,
+    /// 0-3, indexing into the 4 raw huffman tables.
     pub dchuff: u32,
+    /// 0-3, indexing into the 4 raw huffman tables.
     pub achuff: u32,
 }
 

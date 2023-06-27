@@ -45,6 +45,10 @@ impl TableData {
         Self { codes: out }
     }
 
+    pub fn lookup_msb(&self, msb: u16) -> LookupResult {
+        self.codes[msb as usize]
+    }
+
     fn raw(&self) -> &[LookupResult; LUT_LEN] {
         &self.codes
     }
@@ -166,7 +170,7 @@ impl HuffmanTables {
     }
 }
 
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct LookupResult {
     /// Length of the huffman code in bits (number of bits that need to be consumed from the input).
@@ -180,6 +184,14 @@ impl LookupResult {
 
     fn new(bits: u8, value: u8) -> Self {
         Self { bits, value }
+    }
+
+    pub fn bits(&self) -> u8 {
+        self.bits
+    }
+
+    pub fn value(&self) -> u8 {
+        self.value
     }
 }
 
