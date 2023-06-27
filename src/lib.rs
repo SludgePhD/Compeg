@@ -1,3 +1,4 @@
+mod bits;
 mod dynamic;
 mod error;
 mod file;
