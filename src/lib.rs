@@ -24,7 +24,7 @@ use crate::{
     dynamic::{DynamicBuffer, DynamicTexture},
     file::SofMarker,
     huffman::{HuffmanTables, TableData},
-    metadata::QTable,
+    metadata::{QTable, UNZIGZAG},
 };
 
 const OUTPUT_FORMAT: TextureFormat = TextureFormat::Rgba8Uint;
@@ -626,6 +626,11 @@ impl<'a> ImageData<'a> {
             bail!("missing DRI/SOS/SOI marker");
         };
 
+        let max_hsample = components.iter().map(|c| c.Hi()).max().unwrap().into();
+        let max_vsample = components.iter().map(|c| c.Vi()).max().unwrap().into();
+        let width_dus = u32::from((width + 7) / 8);
+        let width_mcus = width_dus / max_hsample;
+
         let metadata = metadata::Metadata {
             width: width.into(),
             height: height.into(),
@@ -639,6 +644,10 @@ impl<'a> ImageData<'a> {
                 achuff: u32::from((component_achuff[i] << 1) | 1),
             }),
             start_position_count: 1, // first start pos is always 0
+            width_mcus,
+            max_hsample,
+            max_vsample,
+            unzigzag: UNZIGZAG,
         };
 
         Ok(Self {

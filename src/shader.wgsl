@@ -20,6 +20,10 @@ struct Metadata {
     height: u32,
     components: array<Component, 3>,
     start_position_count: atomic<u32>,
+    width_mcus: u32,
+    max_hsample: u32,
+    max_vsample: u32,
+    unzigzag: array<u32, 64>,
 }
 
 struct HuffmanTable {
@@ -171,6 +175,55 @@ fn huffdecode(table: u32) -> u32 {
     return entry >> 8u;
 }
 
+// 2x1 data units, enough for 2x1 subsampling
+// This is *very* hard-coded for my specific JPEGs, because making it larger immediately impacts
+// performance. Once naga supports `override` it can be chosen dynamically.
+var<private> mcu_buffer: array<array<vec3<u32>, 16>, 8>;
+
+fn mcu_buffer_clear() {
+    for (var y = 0u; y < 16u; y++) {
+        for (var x = 0u; x < 16u; x++) {
+            mcu_buffer[y][x] = vec3(0u);
+        }
+    }
+}
+
+fn mcu_buffer_store_data_unit(du_coords: vec2<u32>, component: u32, values: array<i32, 64>) {
+    var values = values;
+
+    let shift = component * 8u;
+    for (var i = 0u; i < 64u; i++) {
+        let coords = du_coords * 8u + vec2(i % 8u, i / 8u);
+        mcu_buffer[coords.y][coords.x] |= u32(values[i]) << shift;
+    }
+}
+
+fn mcu_buffer_flush(mcu_idx: u32) {
+    // TODO: undo subsampling, convert color models and spaces
+
+    let mcu_coord = vec2(
+        mcu_idx % metadata.width_mcus,
+        mcu_idx / metadata.width_mcus,
+    );
+
+    let mcu_size = vec2(
+        metadata.max_hsample * 8u,
+        metadata.max_vsample * 8u,
+    );
+
+    let top_left = mcu_coord * mcu_size;
+    for (var y = 0u; y < mcu_size.y; y++) {
+        for (var x = 0u; x < mcu_size.x; x++) {
+            let coord = top_left + vec2(x, y);
+
+            let luma = mcu_buffer[y][x] & 0xffu;
+            textureStore(out, coord, vec4(luma, 0xffu));
+        }
+    }
+
+    mcu_buffer_clear();
+}
+
 // Huffman decode entry point.
 // Each invocation of this shader will decode one restart interval of MCUs.
 @compute
@@ -215,7 +268,7 @@ fn huffman_decode(
 
                     // Decode DC coefficient.
                     let dccat = huffdecode(dchufftable); // 16
-                    var diff = i32(peek(dccat));       // 11
+                    var diff = i32(peek(dccat));         // 11
                     consume(dccat);
 
                     if dccat == 0u {
@@ -250,10 +303,181 @@ fn huffman_decode(
                         let i = unzigzag(pos);
                         decoded[i] = coeff * dequantize(qtable, i);
                     }
+
+                    // Perform iDCT using the `decoded` coefficients.
+                    decoded = idct(decoded);
+                    mcu_buffer_store_data_unit(vec2(h_samp, v_samp), comp, decoded);
                 }
             }
         }
+
+        // All components have now been written to the MCU buffer and can be processed together.
+        mcu_buffer_flush(id.x + i);
     }
+}
+
+// This function is ported from zune-jpeg
+fn idct(in_vector: array<i32, 64>) -> array<i32, 64> {
+    // FIXME: `const`ify
+    let SCALE_BITS = 512 + 65536 + (128 << 17u);
+
+    var in_vector = in_vector;
+    var out_vector = array<i32, 64>();
+
+    // TODO: only processes and forwards the DC component right now, the AC path is broken
+    let dc = (in_vector[0u] >> 3u) + 128;
+    for (var i = 0u; i < 64u; i++) {
+        out_vector[i] = clamp(dc, 0, 255);
+    }
+    if true {
+        return out_vector;
+    }
+
+    for (var ptr_ = 0u; ptr_ < 8u; ptr_++) {
+        var p1: i32;
+        var p2: i32;
+        var p3: i32;
+        var p4: i32;
+        var p5: i32;
+        var t0: i32;
+        var t1: i32;
+        var t2: i32;
+        var t3: i32;
+
+        p2 = in_vector[ptr_ + 16u];
+        p3 = in_vector[ptr_ + 48u];
+
+        p1 = (p2 + p3) * 2217;
+
+        t2 = p1 + p3 * -7567;
+        t3 = p1 + p2 *  3135;
+
+        p2 = in_vector[ptr_];
+        p3 = in_vector[ptr_ + 32u];
+        t0 = fsh(p2 + p3);
+        t1 = fsh(p2 - p3);
+
+        let x0 = t0 + t3 + 512;
+        let x3 = t0 - t3 + 512;
+        let x1 = t1 + t2 + 512;
+        let x2 = t1 - t2 + 512;
+
+        // odd part
+        t0 = in_vector[ptr_ + 56u];
+        t1 = in_vector[ptr_ + 40u];
+        t2 = in_vector[ptr_ + 24u];
+        t3 = in_vector[ptr_ + 8u];
+
+        p3 = t0 + t2;
+        p4 = t1 + t3;
+        p1 = t0 + t3;
+        p2 = t1 + t2;
+        p5 = (p3 + p4) * 4816;
+
+        t0 *= 1223;
+        t1 *= 8410;
+        t2 *= 12586;
+        t3 *= 6149;
+
+        p1 = p5 + p1 * -3685;
+        p2 = p5 + p2 * -10497;
+        p3 = p3 * -8034;
+        p4 = p4 * -1597;
+
+        t3 += p1 + p4;
+        t2 += p2 + p3;
+        t1 += p2 + p4;
+        t0 += p1 + p3;
+
+        in_vector[ptr_] = (x0 + t3) >> 10u;
+        in_vector[ptr_ + 8u] = (x1 + t2) >> 10u;
+        in_vector[ptr_ + 16u] = (x2 + t1) >> 10u;
+        in_vector[ptr_ + 24u] = (x3 + t0) >> 10u;
+        in_vector[ptr_ + 32u] = (x3 - t0) >> 10u;
+        in_vector[ptr_ + 40u] = (x2 - t1) >> 10u;
+        in_vector[ptr_ + 48u] = (x1 - t2) >> 10u;
+        in_vector[ptr_ + 56u] = (x0 - t3) >> 10u;
+    }
+
+    var i = 0u;
+    for (var ptr_ = 0u; ptr_ < 8u; ptr_++) {
+        var p1: i32;
+        var p2: i32;
+        var p3: i32;
+        var p4: i32;
+        var p5: i32;
+        var t0: i32;
+        var t1: i32;
+        var t2: i32;
+        var t3: i32;
+
+        p2 = in_vector[ptr_ + 2u];
+        p3 = in_vector[ptr_ + 6u];
+
+        p1 = (p2 + p3) * 2217;
+        t2 = p1 + p3 * -7567;
+        t3 = p1 + p3 *  3135;
+
+        p2 = in_vector[ptr_];
+        p3 = in_vector[ptr_ + 4u];
+
+        t0 = fsh(p2 + p3);
+        t1 = fsh(p2 - p3);
+
+        let x0 = t0 + t3 + SCALE_BITS;
+        let x3 = t0 - t3 + SCALE_BITS;
+        let x1 = t1 + t2 + SCALE_BITS;
+        let x2 = t1 - t2 + SCALE_BITS;
+        // odd part
+        t0 = in_vector[i + 7u];
+        t1 = in_vector[i + 5u];
+        t2 = in_vector[i + 3u];
+        t3 = in_vector[i + 1u];
+
+        p3 = t0 + t2;
+        p4 = t1 + t3;
+        p1 = t0 + t3;
+        p2 = t1 + t2;
+        p5 = (p3 + p4) * f2f(1.175875602);
+
+        t0 *= 1223;
+        t1 *= 8410;
+        t2 *= 12586;
+        t3 *= 6149;
+
+        p1 = p5 + p1 * -3685;
+        p2 = p5 + p2 * -10497;
+        p3 = p3 * -8034;
+        p4 = p4 * -1597;
+
+        t3 += p1 + p4;
+        t2 += p2 + p3;
+        t1 += p2 + p4;
+        t0 += p1 + p3;
+
+        out_vector[i + 0u] = clamp((x0 + t3) >> 17u, 0, 255);
+        out_vector[i + 1u] = clamp((x1 + t2) >> 17u, 0, 255);
+        out_vector[i + 2u] = clamp((x2 + t1) >> 17u, 0, 255);
+        out_vector[i + 3u] = clamp((x3 + t0) >> 17u, 0, 255);
+        out_vector[i + 4u] = clamp((x3 - t0) >> 17u, 0, 255);
+        out_vector[i + 5u] = clamp((x2 - t1) >> 17u, 0, 255);
+        out_vector[i + 6u] = clamp((x1 - t2) >> 17u, 0, 255);
+        out_vector[i + 7u] = clamp((x0 - t3) >> 17u, 0, 255);
+
+        i += 8u;
+    }
+
+    return out_vector;
+}
+
+// Multiply a number by 4096
+fn f2f(x: f32) -> i32 {
+    return i32(x * 4096.0 + 0.5);
+}
+
+// Multiply a number by 4096
+fn fsh(x: i32) -> i32 {
+    return x << 12u;
 }
 
 fn dequantize(qtable: u32, value: u32) -> i32 {
@@ -266,28 +490,9 @@ fn huff_extend(v: i32, t: u32) -> i32 {
 }
 
 fn unzigzag(pos: u32) -> u32 {
-    // naga doesn't like this *at all*.
-    // move the LUT into `metadata` I guess?
-    let lut = array(
-         0,  1,  8, 16,  9,  2,  3, 10,
-        17, 24, 32, 25, 18, 11,  4,  5,
-        12, 19, 26, 33, 40, 48, 41, 34,
-        27, 20, 13,  6,  7, 14, 21, 28,
-        35, 42, 49, 56, 57, 50, 43, 36,
-        29, 22, 15, 23, 30, 37, 44, 51,
-        58, 59, 52, 45, 38, 31, 39, 46,
-        53, 60, 61, 54, 47, 55, 62, 63,
-    );
-
     if pos >= 64u {
-        return 63;
+        return 63u;
     } else {
-        return lut[pos];
+        return metadata.unzigzag[pos];
     }
 }
-
-/*fn huff_extend(x: i32, s: i32) -> i32
-{
-    // if x<s return x else return x+offset[s] where offset[s] = ( (-1<<s)+1)
-    (x) + ((((x) - (1 << ((s) - 1))) >> 31) & (((-1) << (s)) + 1))
-}*/
