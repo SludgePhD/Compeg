@@ -1,0 +1,1 @@
+- do start position computation and 0xFF 0x00 escaping on the CPU using SIMD

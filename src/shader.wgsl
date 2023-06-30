@@ -316,22 +316,74 @@ fn huffman_decode(
     }
 }
 
+// 0 = DC only
+// 1 = zune-jpeg integer DCT
+// 2 = float DCT
+const IDCT_IMPL: u32 = 2u;
+
 // This function is ported from zune-jpeg
 fn idct(in_vector: array<i32, 64>) -> array<i32, 64> {
+    switch IDCT_IMPL {
+        case 0u: {
+            return idct_dc_only(in_vector);
+        }
+        case 1u: {
+            return idct_zune(in_vector);
+        }
+        case 2u: {
+            return idct_float(in_vector);
+        }
+        default: {
+            return array<i32, 64>();
+        }
+    }
+}
+
+fn idct_dc_only(in_vector: array<i32, 64>) -> array<i32, 64> {
+    var out_vector = array<i32, 64>();
+    let dc = (in_vector[0u] >> 3u) + 128;
+    for (var i = 0u; i < 64u; i++) {
+        out_vector[i] = clamp(dc, 0, 255);
+    }
+    return out_vector;
+}
+
+const PI = 3.141592;
+
+fn idct_float(in_vector: array<i32, 64>) -> array<i32, 64> {
+    var in_vector = in_vector;
+    var out_vector = array<i32, 64>();
+
+    for (var y = 0u; y < 8u; y++) {
+        for (var x = 0u; x < 8u; x++) {
+            var val = 0.0;
+
+            for (var u = 0u; u < 8u; u++) {
+                for (var v = 0u; v < 8u; v++) {
+                    let c_u = select(1.0, 1.0 / sqrt(2.0), u == 0u);
+                    let c_v = select(1.0, 1.0 / sqrt(2.0), v == 0u);
+                    let s_vu = f32(in_vector[v * 8u + u]);
+
+                    val += c_u * c_v * s_vu
+                        * cos((2.0 * f32(x) + 1.0) * f32(u) * PI / 16.0)
+                        * cos((2.0 * f32(y) + 1.0) * f32(v) * PI / 16.0);
+                }
+            }
+
+            val = val / 4.0 + 128.0;
+            out_vector[y * 8u + x] = clamp(i32(val), 0, 255);
+        }
+    }
+
+    return out_vector;
+}
+
+fn idct_zune(in_vector: array<i32, 64>) -> array<i32, 64> {
     // FIXME: `const`ify
     let SCALE_BITS = 512 + 65536 + (128 << 17u);
 
     var in_vector = in_vector;
     var out_vector = array<i32, 64>();
-
-    // TODO: only processes and forwards the DC component right now, the AC path is broken
-    let dc = (in_vector[0u] >> 3u) + 128;
-    for (var i = 0u; i < 64u; i++) {
-        out_vector[i] = clamp(dc, 0, 255);
-    }
-    if true {
-        return out_vector;
-    }
 
     for (var ptr_ = 0u; ptr_ < 8u; ptr_++) {
         var p1: i32;
