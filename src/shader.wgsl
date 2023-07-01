@@ -126,28 +126,33 @@ fn huffdecode(table: u32) -> u32 {
     return entry >> 8u;
 }
 
+struct DataUnitBuf {
+    // 8 rows of 8 8-bit pixels, compressed into a `vec2<u32>`
+    pixels: array<vec2<u32>, 8>, // 64 bytes
+}
+
 // 2x1 data units, enough for 2x1 subsampling
 // This is *very* hard-coded for my specific JPEGs, because making it larger immediately impacts
 // performance. Once naga supports `override` it can be chosen dynamically.
-var<private> mcu_buffer: array<array<vec3<u32>, 16>, 8>;
+var<private> mcu_buffer: array<DataUnitBuf, 4>;
+// 64 * 4 bytes = 256 bytes per invocation
 
-// 4 * 4 * 16 * 8 bytes = 2048 bytes per invocation, ouch
-
-fn mcu_buffer_clear() {
-    for (var y = 0u; y < 16u; y++) {
-        for (var x = 0u; x < 16u; x++) {
-            mcu_buffer[y][x] = vec3(0u);
-        }
-    }
-}
-
-fn mcu_buffer_store_data_unit(du_coords: vec2<u32>, component: u32, values: array<i32, 64>) {
+fn mcu_buffer_store_data_unit(du_index: u32, values: array<i32, 64>) {
     var values = values;
 
-    let shift = component * 8u;
-    for (var i = 0u; i < 64u; i++) {
-        let coords = du_coords * 8u + vec2(i % 8u, i / 8u);
-        mcu_buffer[coords.y][coords.x] |= u32(values[i]) << shift;
+    for (var y = 0u; y < 8u; y++) {
+        let row = vec2(
+            u32(values[y * 8u + 0u]) << 0u |
+            u32(values[y * 8u + 1u]) << 8u |
+            u32(values[y * 8u + 2u]) << 16u |
+            u32(values[y * 8u + 3u]) << 24u,
+            u32(values[y * 8u + 4u]) << 0u |
+            u32(values[y * 8u + 5u]) << 8u |
+            u32(values[y * 8u + 6u]) << 16u |
+            u32(values[y * 8u + 7u]) << 24u,
+        );
+
+        mcu_buffer[du_index].pixels[y] = row;
     }
 }
 
@@ -167,14 +172,23 @@ fn mcu_buffer_flush(mcu_idx: u32) {
     let top_left = mcu_coord * mcu_size;
     for (var y = 0u; y < mcu_size.y; y++) {
         for (var x = 0u; x < mcu_size.x; x++) {
-            let coord = top_left + vec2(x, y);
+            let coord = vec2(x, y);
 
-            let luma = mcu_buffer[y][x] & 0xffu;
-            textureStore(out, coord, vec4(luma, 0xffu));
+            // FIXME: the computation is hardcoded to my specific JPEGs, it should be made more flexible
+
+            let chroma_x = x / 2u;
+            let c_word = u32(x > 3u);
+            let u = (mcu_buffer[2u].pixels[y][c_word] >> ((x & 3u) * 8u)) & 0xffu;
+            let v = (mcu_buffer[3u].pixels[y][c_word] >> ((x & 3u) * 8u)) & 0xffu;
+
+            let du = u32(x > 7u);
+            let x = x % 8u;
+            let word = u32(x > 3u);
+            let luma = (mcu_buffer[du].pixels[y][word] >> ((x & 3u) * 8u)) & 0xffu;
+
+            textureStore(out, top_left + coord, vec4(vec3(luma), 0xffu));
         }
     }
-
-    mcu_buffer_clear();
 }
 
 // JPEG decode entry point.
@@ -204,6 +218,9 @@ fn jpeg_decode(
         // Decode 1 MCU.
         // Each MCU contains data units for each component in order, with components that have a
         // sampling factor >1 storing several data units in sequence.
+
+        // Data Unit index in the MCU buffer; starts at 0 and is incremented for each DU we write.
+        var du_index = 0u;
 
         for (var comp = 0u; comp < 3u; comp++) {
             let qtable = metadata.components[comp].qtable;
@@ -257,7 +274,8 @@ fn jpeg_decode(
                     decoded = idct(decoded);
 
                     // Write the data unit to the MCU buffer, for later processing.
-                    mcu_buffer_store_data_unit(vec2(h_samp, v_samp), comp, decoded);
+                    mcu_buffer_store_data_unit(du_index, decoded);
+                    du_index += 1u;
                 }
             }
         }
