@@ -15,8 +15,8 @@ use crate::error::Error;
 pub struct ScanBuffer {
     /// Data is stored as `u32`s because that's WebGPU's smallest native integer type. Each
     /// restart interval begins on a word boundary, but the contained bytes are stored packed. This
-    /// allows each shader invocation to load a `u32` from memory and decode it immediately, rather
-    /// than having to shift bytes around.
+    /// allows each shader invocation to load a `u32` from memory and start decoding it immediately,
+    /// rather than having to shift bytes around first.
     words: Vec<u32>,
     /// Start offsets of the restart intervals in `words`.
     start_positions: Vec<u32>,
@@ -49,8 +49,10 @@ impl ScanBuffer {
         // to allocate an extra 1/3rd of the input data length in the output buffer.
         let out_bytes = scan_data.len() + scan_data.len() / 3;
         self.words.resize((out_bytes + 3) / 4, 0);
-        self.start_positions
-            .resize(expected_restart_intervals as usize, 0);
+
+        let start_pos_buffer_length = (expected_restart_intervals as usize).next_power_of_two();
+        let start_pos_index_mask = start_pos_buffer_length - 1;
+        self.start_positions.resize(start_pos_buffer_length, 0);
 
         let out: &mut [u8] = bytemuck::cast_slice_mut(&mut self.words);
         assert!(out.len() >= scan_data.len());
@@ -72,7 +74,7 @@ impl ScanBuffer {
                         // Align the next restart interval on a 4-byte boundary.
                         write_ptr = (write_ptr + 0b11) & !0b11;
 
-                        self.start_positions[ri] = (write_ptr / 4) as u32;
+                        self.start_positions[ri & start_pos_index_mask] = (write_ptr / 4) as u32;
                         ri += 1;
                     }
                     Some(inv) => {
@@ -118,12 +120,24 @@ mod tests {
         assert_eq!(buf.start_positions, start_positions);
     }
 
+    fn check_err(scan_data: &[u8], start_positions: &[u32]) -> Error {
+        let mut buf = ScanBuffer::new();
+        buf.process(scan_data, start_positions.len() as u32)
+            .unwrap_err()
+    }
+
     #[test]
     fn process_scan_data() {
         check(&[0x12, 0x34, 0x56, 0x78], &[0x12, 0x34, 0x56, 0x78], &[0]);
 
         check(&[0xFF, 0xD0, 0xFF, 0xD0], &[], &[0, 0, 0]);
 
+        let scan = &[0xFF, 0x00, 0x44, 0x55, 0xFF, 0xD0, 0x34];
+        check(scan, &[0xFF, 0x44, 0x55, 0x00, 0x34, 0, 0, 0], &[0, 1]);
+    }
+
+    #[test]
+    fn test_expanding_output() {
         // 3 bytes of input data get expanded to 4 bytes of output data. This tests that we allocate
         // enough space in the output buffer.
         check(
@@ -131,8 +145,15 @@ mod tests {
             &[0x11, 0, 0, 0, 0x11, 0, 0, 0, 0x11, 0, 0, 0],
             &[0, 1, 2],
         );
+    }
 
-        let scan = &[0xFF, 0x00, 0x44, 0x55, 0xFF, 0xD0, 0x34];
-        check(scan, &[0xFF, 0x44, 0x55, 0x00, 0x34, 0, 0, 0], &[0, 1]);
+    #[test]
+    fn test_too_many_rst_markers() {
+        // Data corruption can make the actual number of RST markers exceed the expected number.
+        let err = check_err(&[0x11, 0xFF, 0xD0, 0x11, 0xFF, 0xD0, 0x11], &[0]);
+        assert_eq!(
+            err.to_string(),
+            "restart interval count mismatch: counted 3, expected 1"
+        );
     }
 }
