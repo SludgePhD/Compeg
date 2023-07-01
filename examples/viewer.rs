@@ -1,6 +1,14 @@
-use std::{env, fs, process, sync::Arc};
+use std::{
+    env, fs,
+    path::Path,
+    process,
+    sync::{Arc, Mutex},
+    thread,
+};
 
+use anyhow::bail;
 use compeg::{Decoder, Gpu, ImageData};
+use linuxvideo::format::{PixFormat, PixelFormat};
 use wgpu::InstanceDescriptor;
 use winit::{
     dpi::PhysicalSize,
@@ -9,25 +17,73 @@ use winit::{
     window::WindowBuilder,
 };
 
+struct Frame {
+    jpeg: Mutex<Vec<u8>>,
+}
+
 fn main() -> anyhow::Result<()> {
     env_logger::builder()
         .filter_module(env!("CARGO_PKG_NAME"), log::LevelFilter::Trace)
         .parse_default_env()
         .init();
 
-    let jpeg = match &*env::args().skip(1).collect::<Vec<_>>() {
-        [path] => fs::read(&path)?,
+    let ev = EventLoop::new();
+    let proxy = ev.create_proxy();
+
+    let (width, height);
+    let frame = match &*env::args().skip(1).collect::<Vec<_>>() {
+        [path] => {
+            if let Ok(device) = linuxvideo::Device::open(Path::new(path)) {
+                let cap = device.video_capture(PixFormat::new(8000, 8000, PixelFormat::MJPG))?;
+                width = cap.format().width();
+                height = cap.format().height();
+                match cap.format().pixel_format() {
+                    PixelFormat::JPEG | PixelFormat::MJPG => {}
+                    fmt => bail!("unsupported pixel format {fmt}"),
+                }
+                let mut stream = cap.into_stream()?;
+                let mut jpeg = Vec::new();
+                stream.dequeue(|view| {
+                    jpeg.extend_from_slice(&view);
+                    Ok(())
+                })?;
+                let frame = Arc::new(Frame {
+                    jpeg: Mutex::new(jpeg),
+                });
+
+                let f = frame.clone();
+                thread::spawn(move || loop {
+                    let mut jpeg = Vec::new();
+                    stream
+                        .dequeue(|view| {
+                            jpeg.extend_from_slice(&view);
+                            Ok(())
+                        })
+                        .unwrap();
+                    *f.jpeg.lock().unwrap() = jpeg;
+                    proxy.send_event(()).unwrap();
+                });
+
+                frame
+            } else {
+                let jpeg = fs::read(&path)?;
+                let image = ImageData::new(&jpeg)?;
+                width = image.width();
+                height = image.height();
+                let frame = Arc::new(Frame {
+                    jpeg: Mutex::new(jpeg),
+                });
+                frame
+            }
+        }
         _ => {
             eprintln!("usage: viewer <file.jpeg>");
             process::exit(1);
         }
     };
 
-    let image = ImageData::new(jpeg)?;
-
-    let ev = EventLoop::new();
     let win = WindowBuilder::new()
-        .with_inner_size(PhysicalSize::new(image.width(), image.height()))
+        .with_inner_size(PhysicalSize::new(width, height))
         .build(&ev)?;
 
     let instance = wgpu::Instance::new(InstanceDescriptor::default());
@@ -42,7 +98,7 @@ fn main() -> anyhow::Result<()> {
     let (device, queue) = (Arc::new(device), Arc::new(queue));
 
     let mut conf = surface
-        .get_default_config(&adapter, image.width(), image.height())
+        .get_default_config(&adapter, width, height)
         .expect("incompatible surface, despite requiring one");
     conf.usage |= wgpu::TextureUsages::COPY_DST;
     surface.configure(&device, &conf);
@@ -50,11 +106,11 @@ fn main() -> anyhow::Result<()> {
     let gpu = Gpu::from_wgpu(device.clone(), queue.clone())?;
     let mut decoder = Decoder::new(Arc::new(gpu));
 
-    let stride = image.width() * 4; // RGBA texture
+    let stride = width * 4; // RGBA texture
     let scratch = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("scratch"),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
-        size: u64::from(stride) * u64::from(image.height()),
+        size: u64::from(stride) * u64::from(height),
         mapped_at_creation: false,
     });
 
@@ -73,6 +129,14 @@ fn main() -> anyhow::Result<()> {
                 }
             };
 
+            let jpeg = frame.jpeg.lock().unwrap();
+            let image = match ImageData::new(&*jpeg) {
+                Ok(image) => image,
+                Err(e) => {
+                    eprintln!("failed to parse JPEG image: {e}");
+                    process::exit(1);
+                }
+            };
             decoder.start_decode(&image);
 
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -95,6 +159,7 @@ fn main() -> anyhow::Result<()> {
 
             st.present();
         }
+        Event::UserEvent(()) => win.request_redraw(),
         Event::WindowEvent {
             event: WindowEvent::CloseRequested,
             ..
