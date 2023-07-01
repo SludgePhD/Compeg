@@ -196,6 +196,37 @@ mod tests {
 
     use super::*;
 
+    fn device_descriptor() -> DeviceDescriptor<'static> {
+        DeviceDescriptor {
+            features: Features::PUSH_CONSTANTS,
+            limits: Limits {
+                max_push_constant_size: 16,
+                max_compute_workgroup_size_x: 1024,
+                max_compute_invocations_per_workgroup: 1024,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    async fn open() -> crate::Result<Gpu> {
+        let instance = Instance::new(InstanceDescriptor {
+            // The OpenGL backend panics spuriously, so don't enable it.
+            backends: Backends::PRIMARY,
+            ..Default::default()
+        });
+        let adapter = instance
+            .request_adapter(&RequestAdapterOptions::default())
+            .await
+            .ok_or_else(|| crate::Error::from("no supported graphics adapter found"))?;
+        let (device, queue) = adapter
+            .request_device(&device_descriptor(), None)
+            .await
+            .map_err(|_| crate::Error::from("no supported graphics device found"))?;
+
+        Gpu::from_wgpu(device.into(), queue.into())
+    }
+
     #[track_caller]
     fn check(unsorted: &[u32]) {
         env_logger::builder()
@@ -204,7 +235,7 @@ mod tests {
             .try_init()
             .ok();
 
-        let gpu = Arc::new(pollster::block_on(crate::Gpu::open()).unwrap());
+        let gpu = Arc::new(pollster::block_on(open()).unwrap());
         let mut sorter = Sorter::new(gpu.clone());
         let mut dbuf = DynamicBuffer::new(
             gpu.clone(),
