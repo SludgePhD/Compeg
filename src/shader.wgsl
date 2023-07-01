@@ -1,4 +1,5 @@
-// Most of these `u32`s are actually just single bytes, but WGSL doesn't support that data type.
+// Many of these `u32`s are actually just single bytes, but WGSL doesn't support that data type, so
+// we zero-extend them.
 
 struct QTable {
     values: array<i32, 64>,   // 64 bytes, zero-padded
@@ -26,6 +27,8 @@ struct Metadata {
     width_mcus: u32,
     max_hsample: u32,
     max_vsample: u32,
+    // Array index lookup table to undo the zigzag encoding. This should really just be a constant
+    // array defined in the shader, but naga doesn't support those.
     unzigzag: array<u32, 64>,
 }
 
@@ -57,14 +60,22 @@ struct HuffmanTable {
 
 
 struct BitStreamState {
+    // Index of the next word in `scan_data` that this bit stream will fetch into the bit buffer.
     next_word: u32,
+    // Upper 32 bits of the bit buffer (MSB-aligned).
     cur: u32,
+    // Lower 32 bits of the bit buffer (MSB-aligned).
     next: u32,
+    // Number of bits left to read from the buffer words `cur` and `next`.
     left: u32,
 }
 
-var<private> bitstate: BitStreamState;
+var<private> bitstate: BitStreamState; // 16 bytes per invocation
 
+// Refills the bit stream buffer so that there are at least 32 bits ready to read.
+//
+// 32 is the "magic number" here, because it allows decoding one huffman code (up to 16 bits) and
+// one scalar value (up to 15 bits) without refilling in between.
 fn refill() {
     if bitstate.left < 32u {
         var w = scan_data[bitstate.next_word];
@@ -76,15 +87,12 @@ fn refill() {
         bitstate.next_word += 1u;
 
         bitstate.cur |= w >> bitstate.left;
-        if bitstate.left == 0u {
-            bitstate.next = 0u;
-        } else {
-            bitstate.next = w << (32u - bitstate.left);
-        }
+        bitstate.next = (w << 1u) << (31u - bitstate.left);
         bitstate.left += 32u;
     }
 }
 
+// Advances the bit stream by `n` bits, without refilling it.
 fn consume(n: u32) {
     bitstate.cur <<= n;
     bitstate.cur |= (bitstate.next >> 1u) >> (31u - n);
@@ -92,11 +100,15 @@ fn consume(n: u32) {
     bitstate.left -= n;
 }
 
+// Peeks at the next `n` bits in the bit stream.
 fn peek(n: u32) -> u32 {
     return (bitstate.cur >> 1u) >> (31u - n);
 }
 
+// Decodes a huffman code from the bit stream, using huffman table `table`.
+//
 // Precondition: At least 16 bits left in the reader.
+// Postcondition: Consumes up to 16 bits from the bit stream without refilling it.
 fn huffdecode(table: u32) -> u32 {
     // Huffman LUTs are generated to be indexed by the top 16 bits in the buffer. But we store 2
     // 16-bit entries in the same word, so we have to fetch 2 entries at once.
@@ -178,8 +190,7 @@ fn jpeg_decode(
 
     // Initialize bit reader state. The start index is counted in words, so that each invocation
     // starts decoding at a word boundary and no byte shifting is needed.
-    let start_index = start_positions[id.x];
-    bitstate.next_word = start_index;
+    bitstate.next_word = start_positions[id.x];
     bitstate.cur = 0u;
     bitstate.next = 0u;
     bitstate.left = 0u;
@@ -215,7 +226,7 @@ fn jpeg_decode(
                         diff = huff_extend(diff, dccat);
                     }
                     dcpred[comp] += diff;
-                    decoded[0] = dcpred[comp] * dequantize(qtable, 0u);
+                    decoded[0] = dcpred[comp] * dequant(qtable, 0u);
 
                     // Decode AC coefficients.
                     for (var pos = 1u; pos < 64u; pos++) {
@@ -232,14 +243,14 @@ fn jpeg_decode(
                         }
 
                         let rrrr = rrrrssss >> 4u;
-                        let ssss = rrrrssss & 0xfu;
+                        let ssss = rrrrssss & 0x0fu;
                         pos += rrrr;
                         let val = i32(peek(ssss));
                         consume(ssss);
 
                         let coeff = huff_extend(val, ssss);
                         let i = unzigzag(pos);
-                        decoded[i] = coeff * dequantize(qtable, i);
+                        decoded[i] = coeff * dequant(qtable, i);
                     }
 
                     // Perform iDCT using the `decoded` coefficients.
@@ -256,10 +267,13 @@ fn jpeg_decode(
     }
 }
 
-fn dequantize(qtable: u32, value: u32) -> i32 {
-    return metadata.qtables[qtable].values[value];
+// Returns the quantization table value in `qtable` at `index`.
+// Multiplication with a quantized value results in the dequantized value.
+fn dequant(qtable: u32, index: u32) -> i32 {
+    return metadata.qtables[qtable].values[index];
 }
 
+// Performs the `Huff_extend` procedure from the specification.
 fn huff_extend(v: i32, t: u32) -> i32 {
     let vt = 1 << (t - 1u);
     return select(v, v + (-1 << t) + 1, v < vt);
@@ -276,6 +290,29 @@ fn unzigzag(pos: u32) -> u32 {
 //////////////////////////////////////////////
 // IDCT (Inverse Discrete Cosine Transform) //
 //////////////////////////////////////////////
+
+// We have several IDCT implementations, primarily just for development and debugging.
+// They are chosen statically with the `IDCT_IMPL` parameter.
+
+// 0 = idct_dc_only
+// ----------------
+// This IDCT ignores the AC values and only decodes the DC coefficient. This is mostly meant for
+// debugging. The resulting image will consist entirely of flat 8x8 blocks, but they should be of
+// roughly the right color/brightness compared to the correct result.
+//
+// 1 = idct_zune
+// -------------
+// This IDCT was ported straight from zune-jpeg's scalar integer IDCT. The original code can be
+// found here:
+// https://github.com/etemesi254/zune-image/blob/a59c6753d7687dab0ef00389a7b54b7db8970d94/zune-jpeg/src/idct/scalar.rs
+// For unknown reasons, the ported implementation does not work. It also seems suboptimal to just
+// naively port an IDCT implementation meant to enable autovectorization, since that doesn't help
+// much on GPUs.
+//
+// 2 = idct_float
+// --------------
+// A naive port of the IDCT routine described by the JPEG specification. Surprisingly (or rather,
+// unsurprisingly?) this not only appears to work, but doesn't even perform as poorly as it looks!
 
 // 0 = DC only
 // 1 = zune-jpeg integer DCT
