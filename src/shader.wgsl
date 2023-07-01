@@ -157,8 +157,6 @@ fn mcu_buffer_store_data_unit(du_index: u32, values: array<i32, 64>) {
 }
 
 fn mcu_buffer_flush(mcu_idx: u32) {
-    // TODO: undo subsampling, convert color models and spaces
-
     let mcu_coord = vec2(
         mcu_idx % metadata.width_mcus,
         mcu_idx / metadata.width_mcus,
@@ -178,17 +176,53 @@ fn mcu_buffer_flush(mcu_idx: u32) {
 
             let chroma_x = x / 2u;
             let c_word = u32(x > 3u);
-            let u = (mcu_buffer[2u].pixels[y][c_word] >> ((x & 3u) * 8u)) & 0xffu;
-            let v = (mcu_buffer[3u].pixels[y][c_word] >> ((x & 3u) * 8u)) & 0xffu;
+            let cb = (mcu_buffer[2u].pixels[y][c_word] >> ((x & 3u) * 8u)) & 0xffu;
+            let cr = (mcu_buffer[3u].pixels[y][c_word] >> ((x & 3u) * 8u)) & 0xffu;
 
             let du = u32(x > 7u);
             let x = x % 8u;
             let word = u32(x > 3u);
             let luma = (mcu_buffer[du].pixels[y][word] >> ((x & 3u) * 8u)) & 0xffu;
 
-            textureStore(out, top_left + coord, vec4(vec3(luma), 0xffu));
+            let rgb = ycbcr2rgb(luma, cb, cr);
+            textureStore(out, top_left + coord, vec4(rgb, 0xffu));
         }
     }
+}
+
+fn ycbcr2rgb(y: u32, cb: u32, cr: u32) -> vec3<u32> {
+    // JFIF specifies a default YCbCr color space according to the BT.601 standard. "Limited range"
+    // is not used, the full 256 values are available for luminance information.
+
+    let y = i32(y);
+    let cb = i32(cb) - 128;
+    let cr = i32(cr) - 128;
+    let r = y + ((45 * cr) >> 5u);
+    let g = y - ((11 * cb + 23 * cr) >> 5u);
+    let b = y + ((113 * cb) >> 6u);
+    return vec3<u32>(clamp(vec3(r, g, b), vec3(0), vec3(255)));
+}
+
+// Happy little accidents while writing the above function:
+fn ycbcr2glitchart(y: u32, cb: u32, cr: u32) -> vec3<u32> {
+    let ycbcr = vec3<f32>(vec3(y, cb, cr)) - vec3(0.0, 128.0, 128.0);
+    let m = mat3x3(
+        1.0, 0.0, 45.0,
+        1.0, -11.0, 23.0,
+        1.0, 113.0, 0.0,
+    );
+    let rgb = vec3<i32>(ycbcr * m);
+    return vec3<u32>(vec3(rgb.r >> 5u, rgb.g >> 5u, rgb.b >> 6u));
+}
+
+fn ycbcr2glitchart2(y: u32, cb: u32, cr: u32) -> vec3<u32> {
+    let y = i32(y);
+    let cb = i32(cb) - 128;
+    let cr = i32(cr) - 128;
+    let r = y + (45 * cr) >> 5u;
+    let g = y - (11 * cb + 23 * cr) >> 5u;
+    let b = y + (113 * cb) >> 6u;
+    return vec3<u32>(vec3(r, g, b));
 }
 
 // JPEG decode entry point.

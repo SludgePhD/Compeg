@@ -264,9 +264,18 @@ pub enum SegmentKind<'a> {
     Dri(Dri),
     Sof(Sof<'a>),
     Sos(Sos<'a>),
+    /// **S**tart **O**f **I**mage.
+    ///
+    /// In well-formed JPEG files, this is always the very first marker.
     Soi,
+    /// **E**nd **O**f **I**mage.
+    ///
+    /// In well-formed JPEG files, this is always the last marker.
     Eoi,
-    Other { marker: u8, data: &'a [u8] },
+    Other {
+        marker: u8,
+        data: &'a [u8],
+    },
 }
 
 #[derive(Copy, Clone, AnyBitPattern)]

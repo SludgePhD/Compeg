@@ -30,14 +30,6 @@ impl ScanBuffer {
         }
     }
 
-    pub fn processed_scan_data(&self) -> &[u8] {
-        bytemuck::cast_slice(&self.words)
-    }
-
-    pub fn start_positions(&self) -> &[u8] {
-        bytemuck::cast_slice(&self.start_positions)
-    }
-
     pub fn process(
         &mut self,
         scan_data: &[u8],
@@ -53,9 +45,9 @@ impl ScanBuffer {
         let start_pos_buffer_length = (expected_restart_intervals as usize).next_power_of_two();
         let start_pos_index_mask = start_pos_buffer_length - 1;
         self.start_positions.resize(start_pos_buffer_length, 0);
+        assert!(self.start_positions.len() > start_pos_index_mask);
 
         let out: &mut [u8] = bytemuck::cast_slice_mut(&mut self.words);
-        assert!(out.len() >= scan_data.len());
 
         let mut ri = 1;
         let mut write_ptr = 0;
@@ -102,6 +94,16 @@ impl ScanBuffer {
         }
 
         Ok(())
+    }
+
+    /// Returns the preprocessed scan data, ready for upload to GPU memory.
+    pub fn processed_scan_data(&self) -> &[u8] {
+        bytemuck::cast_slice(&self.words)
+    }
+
+    /// Returns the computed start positions, ready for upload to GPU memory.
+    pub fn start_positions(&self) -> &[u8] {
+        bytemuck::cast_slice(&self.start_positions)
     }
 }
 
