@@ -38,21 +38,13 @@ pub struct Gpu {
     device: Arc<Device>,
     queue: Arc<Queue>,
     shared_bind_group_layout: Arc<BindGroupLayout>,
-    huffman_decode_pipeline: ComputePipeline,
+    jpeg_decode_pipeline: ComputePipeline,
 }
 
 impl Gpu {
     pub fn device_descriptor() -> DeviceDescriptor<'static> {
-        DeviceDescriptor {
-            features: Features::PUSH_CONSTANTS,
-            limits: Limits {
-                max_push_constant_size: 16,
-                max_compute_workgroup_size_x: 1024,
-                max_compute_invocations_per_workgroup: 1024,
-                ..Default::default()
-            },
-            ..Default::default()
-        }
+        // We're back to vanilla WebGPU for now (since the sort shader removal).
+        DeviceDescriptor::default()
     }
 
     pub async fn open() -> Result<Self> {
@@ -88,13 +80,13 @@ impl Gpu {
                         binding: 0,
                         visibility: ShaderStages::COMPUTE,
                         ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: false },
+                            ty: BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
                         count: None,
                     },
-                    // `scan_data`
+                    // `huffman_luts`
                     BindGroupLayoutEntry {
                         binding: 1,
                         visibility: ShaderStages::COMPUTE,
@@ -105,12 +97,23 @@ impl Gpu {
                         },
                         count: None,
                     },
-                    // `scan_positions`
+                    // `scan_data`
                     BindGroupLayoutEntry {
                         binding: 2,
                         visibility: ShaderStages::COMPUTE,
                         ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: false },
+                            ty: BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // `scan_positions`
+                    BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -118,34 +121,12 @@ impl Gpu {
                     },
                     // `out`
                     BindGroupLayoutEntry {
-                        binding: 3,
+                        binding: 4,
                         visibility: ShaderStages::COMPUTE,
                         ty: BindingType::StorageTexture {
                             access: StorageTextureAccess::WriteOnly,
                             format: OUTPUT_FORMAT,
                             view_dimension: TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                    // `debug`
-                    BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // `huffman_luts`
-                    BindGroupLayoutEntry {
-                        binding: 5,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
                         },
                         count: None,
                     },
@@ -156,18 +137,18 @@ impl Gpu {
             bind_group_layouts: &[&shared_bind_group_layout],
             push_constant_ranges: &[],
         });
-        let huffman_decode_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
-            label: Some("huffman_decode_pipeline"),
+        let jpeg_decode_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("jpeg_decode_pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: "huffman_decode",
+            entry_point: "jpeg_decode",
         });
 
         Ok(Self {
             device,
             queue,
             shared_bind_group_layout: Arc::new(shared_bind_group_layout),
-            huffman_decode_pipeline,
+            jpeg_decode_pipeline,
         })
     }
 }
@@ -179,7 +160,6 @@ pub struct Decoder {
     gpu: Arc<Gpu>,
     metadata: Buffer,
     huffman_tables: Buffer,
-    debug: Buffer,
     /// Holds all the scan data of the JPEG (including all embedded RST markers). This constitutes
     /// the main input data to the shader pipeline.
     scan_data: DynamicBuffer,
@@ -203,19 +183,13 @@ impl Decoder {
             usage: BufferUsages::COPY_DST | BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        let debug = gpu.device.create_buffer(&BufferDescriptor {
-            label: Some("debug"),
-            size: 1024,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
 
         let scan_data = DynamicBuffer::new(
             gpu.clone(),
             "scan_data",
             BufferUsages::COPY_DST | BufferUsages::STORAGE,
         );
-        let mut start_positions_buffer = DynamicBuffer::new(
+        let start_positions_buffer = DynamicBuffer::new(
             gpu.clone(),
             "start_positions",
             BufferUsages::COPY_DST | BufferUsages::COPY_SRC | BufferUsages::STORAGE,
@@ -234,13 +208,10 @@ impl Decoder {
             "shared_bind_group",
         );
 
-        start_positions_buffer.reserve(500000);
-
         Self {
             gpu,
             metadata,
             huffman_tables,
-            debug,
             scan_data,
             start_positions_buffer,
             output,
@@ -250,8 +221,7 @@ impl Decoder {
     }
 
     pub fn start_decode(&mut self, data: &ImageData<'_>) {
-        self.output
-            .reserve(data.metadata.width, data.metadata.height);
+        self.output.reserve(data.width(), data.height());
 
         let total_restart_intervals = data.metadata.total_restart_intervals;
         let t_preprocess = time(|| {
@@ -266,13 +236,13 @@ impl Decoder {
             self.scan_data.write(self.scan_buffer.processed_scan_data());
             self.start_positions_buffer
                 .write(self.scan_buffer.start_positions());
-        });
 
-        self.gpu.queue.write_buffer(
-            &self.huffman_tables,
-            0,
-            bytemuck::bytes_of(data.huffman_tables.raw()),
-        );
+            self.gpu.queue.write_buffer(
+                &self.huffman_tables,
+                0,
+                bytemuck::bytes_of(data.huffman_tables.raw()),
+            );
+        });
 
         let mut enc = self
             .gpu
@@ -281,11 +251,10 @@ impl Decoder {
 
         let bind_group = self.shared_bind_group.bind_group(&[
             self.metadata.as_entire_binding().into(),
+            self.huffman_tables.as_entire_binding().into(),
             self.scan_data.as_resource(),
             self.start_positions_buffer.as_resource(),
             self.output.as_resource(),
-            self.debug.as_entire_binding().into(),
-            self.huffman_tables.as_entire_binding().into(),
         ]);
 
         let mut compute = enc.begin_compute_pass(&ComputePassDescriptor::default());
@@ -294,7 +263,7 @@ impl Decoder {
             panic!("restart interval count {total_restart_intervals} exceeds maximum of 65535*{WORKGROUP_SIZE}");
         }
         compute.set_bind_group(0, bind_group, &[]);
-        compute.set_pipeline(&self.gpu.huffman_decode_pipeline);
+        compute.set_pipeline(&self.gpu.jpeg_decode_pipeline);
         compute.dispatch_workgroups(workgroups, 1, 1);
         drop(compute);
 
@@ -332,6 +301,8 @@ fn time<R>(f: impl FnOnce() -> R) -> Duration {
 /// A parsed JPEG image, containing all data needed for on-GPU decoding.
 pub struct ImageData<'a> {
     metadata: metadata::Metadata,
+    width: u16,
+    height: u16,
     huffman_tables: HuffmanTables,
     jpeg: Cow<'a, [u8]>,
     scan_data_offset: usize,
@@ -517,8 +488,6 @@ impl<'a> ImageData<'a> {
         let total_restart_intervals = height_mcus * width_mcus / ri;
 
         let metadata = metadata::Metadata {
-            width: width.into(),
-            height: height.into(),
             restart_interval: ri,
             qtables,
             components: [0, 1, 2].map(|i| metadata::Component {
@@ -537,6 +506,8 @@ impl<'a> ImageData<'a> {
 
         Ok(Self {
             metadata,
+            width,
+            height,
             huffman_tables,
             jpeg,
             scan_data_offset,
@@ -544,14 +515,16 @@ impl<'a> ImageData<'a> {
         })
     }
 
+    /// Returns the width of the image in pixels.
     #[inline]
     pub fn width(&self) -> u32 {
-        self.metadata.width
+        self.width.into()
     }
 
+    /// Returns the height of the image in pixels.
     #[inline]
     pub fn height(&self) -> u32 {
-        self.metadata.height
+        self.height.into()
     }
 
     fn scan_data(&self) -> &[u8] {

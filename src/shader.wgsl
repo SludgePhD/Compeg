@@ -21,8 +21,6 @@ struct Metadata {
     qtables: array<QTable, 4>,
     // Ri – number of MCUs per restart interval
     restart_interval: u32,
-    width: u32, // FIXME remove
-    height: u32,
     components: array<Component, 3>,
     start_position_count: u32,
     width_mcus: u32,
@@ -36,28 +34,27 @@ struct HuffmanTable {
     lut: array<u32, 32768>,
 }
 
-@group(0) @binding(0) var<storage, read_write> metadata: Metadata;
-
-// The preprocessed JPEG scan data.
-// This is raw byte data, but packed into `u32`s, since WebGPU doesn't have `u8`.
-// The preprocessing removes all RST markers, replaces all byte-stuffed 0xFF 0x00 sequences with
-// just 0xFF, and aligns every restart interval on a `u32` boundary so that the shader doesn't have
-// to do unnecessary bytewise processing.
-@group(0) @binding(1) var<storage, read> scan_data: array<u32>;
-
-// List of word indices in `scan_data` where restart intervals begin.
-@group(0) @binding(2) var<storage, read_write> start_positions: array<u32>;
-
-@group(0) @binding(3) var out: texture_storage_2d<rgba8uint, write>;
-
-@group(0) @binding(4) var<storage, read_write> debug: array<u32>;
+@group(0) @binding(0) var<storage, read> metadata: Metadata;
 
 // Order:
 // Index 0 DC
 // Index 0 AC
 // Index 1 DC
 // Index 1 AC
-@group(0) @binding(5) var<storage, read> huffman_luts: array<HuffmanTable, 4>;
+@group(0) @binding(1) var<storage, read> huffman_luts: array<HuffmanTable, 4>;
+
+// The preprocessed JPEG scan data.
+// This is raw byte data, but packed into `u32`s, since WebGPU doesn't have `u8`.
+// The preprocessing removes all RST markers, replaces all byte-stuffed 0xFF 0x00 sequences with
+// just 0xFF, and aligns every restart interval on a `u32` boundary so that the shader doesn't have
+// to do unnecessary bytewise processing.
+@group(0) @binding(2) var<storage, read> scan_data: array<u32>;
+
+// List of word indices in `scan_data` where restart intervals begin.
+@group(0) @binding(3) var<storage, read> start_positions: array<u32>;
+
+@group(0) @binding(4) var out: texture_storage_2d<rgba8uint, write>;
+
 
 struct BitStreamState {
     next_word: u32,
@@ -122,6 +119,8 @@ fn huffdecode(table: u32) -> u32 {
 // performance. Once naga supports `override` it can be chosen dynamically.
 var<private> mcu_buffer: array<array<vec3<u32>, 16>, 8>;
 
+// 4 * 4 * 16 * 8 bytes = 2048 bytes per invocation, ouch
+
 fn mcu_buffer_clear() {
     for (var y = 0u; y < 16u; y++) {
         for (var x = 0u; x < 16u; x++) {
@@ -166,18 +165,19 @@ fn mcu_buffer_flush(mcu_idx: u32) {
     mcu_buffer_clear();
 }
 
-// Huffman decode entry point.
+// JPEG decode entry point.
 // Each invocation of this shader will decode one restart interval of MCUs.
 @compute
 @workgroup_size(64)
-fn huffman_decode(
+fn jpeg_decode(
     @builtin(global_invocation_id) id: vec3<u32>,
 ) {
     if (id.x >= metadata.start_position_count) {
         return;
     }
 
-    // Initialize bit reader state. The start index is counted in words, so no byte shifting is needed.
+    // Initialize bit reader state. The start index is counted in words, so that each invocation
+    // starts decoding at a word boundary and no byte shifting is needed.
     let start_index = start_positions[id.x];
     bitstate.next_word = start_index;
     bitstate.cur = 0u;
@@ -244,6 +244,8 @@ fn huffman_decode(
 
                     // Perform iDCT using the `decoded` coefficients.
                     decoded = idct(decoded);
+
+                    // Write the data unit to the MCU buffer, for later processing.
                     mcu_buffer_store_data_unit(vec2(h_samp, v_samp), comp, decoded);
                 }
             }

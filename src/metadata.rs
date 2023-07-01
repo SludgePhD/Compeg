@@ -24,8 +24,6 @@ pub struct Metadata {
     pub qtables: [QTable; 4],
     // Ri – number of MCUs per restart interval
     pub restart_interval: u32,
-    pub width: u32,
-    pub height: u32,
     pub components: [Component; 3],
     /// Written by shader.
     pub total_restart_intervals: u32,

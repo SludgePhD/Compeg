@@ -1,3 +1,9 @@
+//! Bitonic sort implementation.
+//!
+//! This is a WebGPU port of https://github.com/microsoft/DirectX-Graphics-Samples/blob/5ca41579b6837b3064c8b7333071859425c5c4de/MiniEngine/Core/Shaders/Bitonic32PreSortCS.hlsl.
+//! It is not currently used (anymore) and serves mostly as an example. Maybe it will be useful to
+//! someone else.
+
 #![allow(dead_code)]
 
 use std::{iter, sync::Arc};
