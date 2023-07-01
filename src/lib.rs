@@ -4,6 +4,7 @@ mod error;
 mod file;
 mod huffman;
 mod metadata;
+mod scan;
 mod sort;
 
 use std::{
@@ -14,10 +15,10 @@ use std::{
 };
 
 use bytemuck::Zeroable;
-use dynamic::{DownloadBuffer, DynamicBindGroup};
+use dynamic::DynamicBindGroup;
 use error::{Error, Result};
 use file::{JpegParser, SegmentKind};
-use sort::Sorter;
+use scan::ScanBuffer;
 use wgpu::*;
 
 use crate::{
@@ -37,7 +38,6 @@ pub struct Gpu {
     device: Arc<Device>,
     queue: Arc<Queue>,
     shared_bind_group_layout: Arc<BindGroupLayout>,
-    compute_start_positions_pipeline: ComputePipeline,
     huffman_decode_pipeline: ComputePipeline,
 }
 
@@ -151,22 +151,14 @@ impl Gpu {
                     },
                 ],
             });
-        let shared_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("shared_pipeline_layout"),
             bind_group_layouts: &[&shared_bind_group_layout],
             push_constant_ranges: &[],
         });
-
-        let compute_start_positions_pipeline =
-            device.create_compute_pipeline(&ComputePipelineDescriptor {
-                label: Some("compute_start_positions_pipeline"),
-                layout: Some(&shared_pipeline_layout),
-                module: &shader,
-                entry_point: "compute_start_positions",
-            });
         let huffman_decode_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
             label: Some("huffman_decode_pipeline"),
-            layout: Some(&shared_pipeline_layout),
+            layout: Some(&pipeline_layout),
             module: &shader,
             entry_point: "huffman_decode",
         });
@@ -175,7 +167,6 @@ impl Gpu {
             device,
             queue,
             shared_bind_group_layout: Arc::new(shared_bind_group_layout),
-            compute_start_positions_pipeline,
             huffman_decode_pipeline,
         })
     }
@@ -186,20 +177,16 @@ impl Gpu {
 /// Holds all on-GPU buffers and textures needed for JPEG decoding.
 pub struct Decoder {
     gpu: Arc<Gpu>,
-    sorter: Sorter,
     metadata: Buffer,
-    metadata_staging: Buffer,
     huffman_tables: Buffer,
     debug: Buffer,
-    debug_staging: Buffer,
     /// Holds all the scan data of the JPEG (including all embedded RST markers). This constitutes
     /// the main input data to the shader pipeline.
     scan_data: DynamicBuffer,
     start_positions_buffer: DynamicBuffer,
-    start_positions_staging_buffer: DownloadBuffer,
     output: DynamicTexture,
     shared_bind_group: DynamicBindGroup,
-    start_positions: Vec<u32>,
+    scan_buffer: ScanBuffer,
 }
 
 impl Decoder {
@@ -208,12 +195,6 @@ impl Decoder {
             label: Some("metadata"),
             size: mem::size_of::<metadata::Metadata>() as u64,
             usage: BufferUsages::COPY_DST | BufferUsages::COPY_SRC | BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let metadata_staging = gpu.device.create_buffer(&BufferDescriptor {
-            label: Some("metadata_staging"),
-            size: metadata.size(),
-            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
         let huffman_tables = gpu.device.create_buffer(&BufferDescriptor {
@@ -228,12 +209,6 @@ impl Decoder {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        let debug_staging = gpu.device.create_buffer(&BufferDescriptor {
-            label: Some("debug_staging"),
-            size: debug.size(),
-            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
 
         let scan_data = DynamicBuffer::new(
             gpu.clone(),
@@ -245,7 +220,6 @@ impl Decoder {
             "start_positions",
             BufferUsages::COPY_DST | BufferUsages::COPY_SRC | BufferUsages::STORAGE,
         );
-        let start_positions_staging_buffer = DownloadBuffer::new(gpu.clone());
 
         let output = DynamicTexture::new(
             gpu.clone(),
@@ -263,19 +237,15 @@ impl Decoder {
         start_positions_buffer.reserve(500000);
 
         Self {
-            sorter: Sorter::new(gpu.clone()),
             gpu,
             metadata,
-            metadata_staging,
             huffman_tables,
             debug,
-            debug_staging,
             scan_data,
             start_positions_buffer,
-            start_positions_staging_buffer,
             output,
             shared_bind_group,
-            start_positions: Vec::new(),
+            scan_buffer: ScanBuffer::new(),
         }
     }
 
@@ -283,17 +253,19 @@ impl Decoder {
         self.output
             .reserve(data.metadata.width, data.metadata.height);
 
-        let t_compute_positions_cpu =
-            time(|| compute_start_positions(&mut self.start_positions, data.scan_data()));
+        let total_restart_intervals = data.metadata.total_restart_intervals;
+        let t_preprocess = time(|| {
+            self.scan_buffer
+                .process(data.scan_data(), total_restart_intervals)
+        });
 
         let t_enqueue_writes = time(|| {
             self.gpu
                 .queue
                 .write_buffer(&self.metadata, 0, bytemuck::bytes_of(&data.metadata));
-            self.scan_data.write(data.scan_data());
-
-            // Offset 0 is always a start position.
-            self.start_positions_buffer.write(&[0u32]);
+            self.scan_data.write(self.scan_buffer.processed_scan_data());
+            self.start_positions_buffer
+                .write(self.scan_buffer.start_positions());
         });
 
         self.gpu.queue.write_buffer(
@@ -302,12 +274,10 @@ impl Decoder {
             bytemuck::bytes_of(data.huffman_tables.raw()),
         );
 
-        let start = Instant::now();
         let mut enc = self
             .gpu
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
-        let mut compute = enc.begin_compute_pass(&ComputePassDescriptor::default());
 
         let bind_group = self.shared_bind_group.bind_group(&[
             self.metadata.as_entire_binding().into(),
@@ -317,105 +287,30 @@ impl Decoder {
             self.debug.as_entire_binding().into(),
             self.huffman_tables.as_entire_binding().into(),
         ]);
-        compute.set_bind_group(0, bind_group, &[]);
-
-        // For 32 Bytes per invocation, and 64 invocations per workgroup, each workgroup will process
-        // 32*64 bytes of scan data.
-        const BYTES_PER_INVOC: usize = 32;
-        let invocs = (data.scan_data().len() + BYTES_PER_INVOC - 1) / BYTES_PER_INVOC;
-        let workgroups = (invocs + WORKGROUP_SIZE as usize - 1) / WORKGROUP_SIZE as usize;
-        let workgroups = workgroups.try_into().unwrap();
-        compute.set_pipeline(&self.gpu.compute_start_positions_pipeline);
-        compute.dispatch_workgroups(workgroups, 1, 1);
-        drop(compute);
-
-        log::trace!(
-            "compute start positions: {} workgroups ({} shader invocations; {} scan data bytes)",
-            workgroups,
-            workgroups * WORKGROUP_SIZE,
-            data.scan_data().len(),
-        );
-        enc.copy_buffer_to_buffer(
-            &self.metadata,
-            0,
-            &self.metadata_staging,
-            0,
-            self.metadata.size(),
-        );
-        self.gpu.queue.submit([enc.finish()]);
-        self.metadata_staging
-            .slice(..)
-            .map_async(MapMode::Read, Result::unwrap);
-        self.gpu.device.poll(MaintainBase::Wait);
-        let view = self.metadata_staging.slice(..).get_mapped_range();
-        let &meta: &metadata::Metadata = bytemuck::from_bytes(&view);
-        let count = meta.start_position_count;
-        drop(view);
-        self.metadata_staging.unmap();
-        assert_eq!(count as usize, self.start_positions.len());
-        let t_compute_positions_gpu = start.elapsed();
-
-        let start = Instant::now();
-        self.sorter.sort(&mut self.start_positions_buffer, count);
-        self.gpu.device.poll(MaintainBase::Wait);
-        let t_sort = start.elapsed();
-
-        let mut enc = self
-            .gpu
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor::default());
 
         let mut compute = enc.begin_compute_pass(&ComputePassDescriptor::default());
-        let invocs: u32 = self.start_positions.len().try_into().unwrap();
-        let workgroups = (invocs + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let workgroups = (total_restart_intervals + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
         if workgroups > 65535 {
-            panic!("restart interval count {invocs} exceeds maximum of 65535*{WORKGROUP_SIZE}");
+            panic!("restart interval count {total_restart_intervals} exceeds maximum of 65535*{WORKGROUP_SIZE}");
         }
         compute.set_bind_group(0, bind_group, &[]);
         compute.set_pipeline(&self.gpu.huffman_decode_pipeline);
-        compute.dispatch_workgroups(workgroups.into(), 1, 1);
+        compute.dispatch_workgroups(workgroups, 1, 1);
         drop(compute);
 
         log::trace!(
             "dispatching {} workgroups ({} shader invocations; {} restart intervals)",
             workgroups,
             workgroups * WORKGROUP_SIZE,
-            self.start_positions.len(),
+            total_restart_intervals,
         );
-
-        self.start_positions_staging_buffer
-            .download(&self.start_positions_buffer, &mut enc);
-        enc.copy_buffer_to_buffer(&self.debug, 0, &self.debug_staging, 0, self.debug.size());
 
         let buffer = enc.finish();
         let t_submit = time(|| self.gpu.queue.submit([buffer]));
-
-        self.start_positions_staging_buffer.map();
-        self.debug_staging
-            .slice(..)
-            .map_async(MapMode::Read, Result::unwrap);
         let t_poll = time(|| self.gpu.device.poll(MaintainBase::Wait));
 
-        let range = self.debug_staging.slice(..).get_mapped_range();
-        let words: &[u32] = bytemuck::cast_slice(&range);
-        log::debug!("debug = {:08x?}", words);
-        drop(range);
-        self.debug_staging.unmap();
-
-        let range = self.start_positions_staging_buffer.mapped();
-        let words: &[u32] = &bytemuck::cast_slice(&range)[..count as usize];
-        log::debug!("start positions: {}", count);
-        for (i, (actual, expected)) in words.iter().zip(&self.start_positions).enumerate() {
-            if actual != expected {
-                panic!("{actual} <-> {expected} at index {i}");
-            }
-        }
-        drop(range);
-
         log::trace!(
-            "t_compute_positions_cpu={t_compute_positions_cpu:?}, \
-            t_compute_positions_gpu={t_compute_positions_gpu:?}, \
-            t_sort={t_sort:?}, \
+            "t_preprocess={t_preprocess:?}, \
             t_enqueue_writes={t_enqueue_writes:?}, \
             t_submit={t_submit:?}, \
             t_poll={t_poll:?}"
@@ -425,20 +320,6 @@ impl Decoder {
     #[inline]
     pub fn output(&self) -> &Texture {
         self.output.texture()
-    }
-}
-
-fn compute_start_positions(start_positions: &mut Vec<u32>, scan_data: &[u8]) {
-    start_positions.clear();
-    start_positions.push(0);
-
-    for (i, pair) in scan_data.windows(2).enumerate() {
-        let &[first, next] = pair else { unreachable!() };
-
-        if first == 0xff && next != 0x00 {
-            // Next chunk starts after `next`.
-            start_positions.push(i as u32 + 2);
-        }
     }
 }
 
@@ -629,7 +510,11 @@ impl<'a> ImageData<'a> {
         let max_hsample = components.iter().map(|c| c.Hi()).max().unwrap().into();
         let max_vsample = components.iter().map(|c| c.Vi()).max().unwrap().into();
         let width_dus = u32::from((width + 7) / 8);
+        let height_dus = u32::from((height + 7) / 8);
         let width_mcus = width_dus / max_hsample;
+        let height_mcus = height_dus / max_vsample;
+
+        let total_restart_intervals = height_mcus * width_mcus / ri;
 
         let metadata = metadata::Metadata {
             width: width.into(),
@@ -643,7 +528,7 @@ impl<'a> ImageData<'a> {
                 dchuff: u32::from(component_dchuff[i] << 1),
                 achuff: u32::from((component_achuff[i] << 1) | 1),
             }),
-            start_position_count: 1, // first start pos is always 0
+            total_restart_intervals,
             width_mcus,
             max_hsample,
             max_vsample,

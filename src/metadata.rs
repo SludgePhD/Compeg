@@ -28,7 +28,7 @@ pub struct Metadata {
     pub height: u32,
     pub components: [Component; 3],
     /// Written by shader.
-    pub start_position_count: u32,
+    pub total_restart_intervals: u32,
     /// Image width in MCUs.
     pub width_mcus: u32,
     /// Max `Hi` of all the components.

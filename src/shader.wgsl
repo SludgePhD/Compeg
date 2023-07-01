@@ -5,10 +5,15 @@ struct QTable {
 }
 
 struct Component {
+    // Number of vertical data units of this component per MCU.
     vsample: u32,
+    // Number of horizontal data units of this component per MCU.
     hsample: u32,
+    // Quantization table index to use for coefficients (in `metadata.qtables`).
     qtable: u32,
-    dchuff: u32, // TODO change to index into `huffman_luts` directly?
+    // Table index in `huffman_luts` to use for the DC coefficients.
+    dchuff: u32,
+    // Table index in `huffman_luts` to use for the AC coefficients.
     achuff: u32,
 }
 
@@ -16,10 +21,10 @@ struct Metadata {
     qtables: array<QTable, 4>,
     // Ri – number of MCUs per restart interval
     restart_interval: u32,
-    width: u32,
+    width: u32, // FIXME remove
     height: u32,
     components: array<Component, 3>,
-    start_position_count: atomic<u32>,
+    start_position_count: u32,
     width_mcus: u32,
     max_hsample: u32,
     max_vsample: u32,
@@ -33,11 +38,14 @@ struct HuffmanTable {
 
 @group(0) @binding(0) var<storage, read_write> metadata: Metadata;
 
-// The raw JPEG scan data, including all RST markers.
+// The preprocessed JPEG scan data.
 // This is raw byte data, but packed into `u32`s, since WebGPU doesn't have `u8`.
+// The preprocessing removes all RST markers, replaces all byte-stuffed 0xFF 0x00 sequences with
+// just 0xFF, and aligns every restart interval on a `u32` boundary so that the shader doesn't have
+// to do unnecessary bytewise processing.
 @group(0) @binding(1) var<storage, read> scan_data: array<u32>;
 
-// List of byte indexes in `scan_data` where restart intervals begin.
+// List of word indices in `scan_data` where restart intervals begin.
 @group(0) @binding(2) var<storage, read_write> start_positions: array<u32>;
 
 @group(0) @binding(3) var out: texture_storage_2d<rgba8uint, write>;
@@ -51,71 +59,6 @@ struct HuffmanTable {
 // Index 1 AC
 @group(0) @binding(5) var<storage, read> huffman_luts: array<HuffmanTable, 4>;
 
-/// Extracts the byte at `index` (0-3) from `word`.
-fn extractbyte(word: u32, index: u32) -> u32 {
-    return (word >> index * 8u) & 0xffu;
-}
-
-fn scan_byte(index: u32) -> u32 {
-    let word_index = index >> 2u;
-    let byte = index & 3u;
-
-    let word = scan_data[word_index];
-    return extractbyte(word, byte);
-}
-
-fn push_start_position(pos: u32) {
-    let index = atomicAdd(&metadata.start_position_count, 1u);
-    if (index < arrayLength(&start_positions)) {
-        start_positions[index] = pos;
-    }
-}
-
-// "Minor" problem: result isn't actually ordered, but we need it to be ordered so that the index
-// tells us the part of the output texture to write to.
-// That's why the whole sorting module and shader exists.
-@compute
-@workgroup_size(64)
-fn compute_start_positions(
-    @builtin(global_invocation_id) id: vec3<u32>,
-) {
-    // Each invocation will process 32 Bytes (up to 33 at the boundary) to find RST markers
-    // (0xFF 0xVV, where 0xVV != 0x00).
-
-    let start_pos = id.x * (32u / 4u);
-    if (start_pos >= arrayLength(&scan_data)) {
-        return;
-    }
-
-    var i = 0u;
-    for (i = 0u; i < (32u / 4u); i++) {
-        let word = scan_data[start_pos + i];
-        var ff_mask = 0xffu;
-        var nonzero_mask = ff_mask << 8u;
-
-        // Check for 0xFF 0xVV inside the word.
-        for (var j = 0u; j < 3u; j++) {
-            if (((word & ff_mask) == ff_mask) && ((word & nonzero_mask) != 0u)) {
-                let byte_pos = (start_pos + i) * 4u + j + 2u;
-                push_start_position(byte_pos);
-            }
-
-            ff_mask <<= 8u;
-            nonzero_mask <<= 8u;
-        }
-
-        // Check for 0xFF 0xVV crossing over to the next word
-        // If the last byte in this chunk is 0xFF, we have to check the next chunk's first byte.
-        if ((word & 0xff000000u) == 0xff000000u) {
-            let next_byte = scan_data[start_pos + i + 1u] & 0xffu;
-            if (next_byte != 0x00u) {
-                let byte_pos = (start_pos + i + 1u) * 4u + 1u;
-                push_start_position(byte_pos);
-            }
-        }
-    }
-}
-
 struct BitStreamState {
     next_word: u32,
     cur: u32,
@@ -127,7 +70,6 @@ var<private> bitstate: BitStreamState;
 
 fn refill() {
     if bitstate.left < 32u {
-        // FIXME: escape `0xFF 0x00` in bitstream
         var w = scan_data[bitstate.next_word];
         // LSB -> MSB word
         w = (w & 0x000000ffu) << 24u
@@ -235,16 +177,12 @@ fn huffman_decode(
         return;
     }
 
-    // Initialize bit reader state.
-    let scan_data_byte_index = start_positions[id.x];
-    let scan_data_word_index = scan_data_byte_index / 4u;
-    let bit_offset = (scan_data_byte_index % 4u) * 8u;
-    bitstate.next_word = scan_data_word_index;
+    // Initialize bit reader state. The start index is counted in words, so no byte shifting is needed.
+    let start_index = start_positions[id.x];
+    bitstate.next_word = start_index;
     bitstate.cur = 0u;
     bitstate.next = 0u;
     bitstate.left = 0u;
-    refill();
-    consume(bit_offset);
     refill();
 
     // DC coefficient prediction is initialized to 0 at the beginning of each restart interval, and
@@ -315,6 +253,27 @@ fn huffman_decode(
         mcu_buffer_flush(id.x + i);
     }
 }
+
+fn dequantize(qtable: u32, value: u32) -> i32 {
+    return metadata.qtables[qtable].values[value];
+}
+
+fn huff_extend(v: i32, t: u32) -> i32 {
+    let vt = 1 << (t - 1u);
+    return select(v, v + (-1 << t) + 1, v < vt);
+}
+
+fn unzigzag(pos: u32) -> u32 {
+    if pos >= 64u {
+        return 63u;
+    } else {
+        return metadata.unzigzag[pos];
+    }
+}
+
+//////////////////////////////////////////////
+// IDCT (Inverse Discrete Cosine Transform) //
+//////////////////////////////////////////////
 
 // 0 = DC only
 // 1 = zune-jpeg integer DCT
@@ -530,21 +489,4 @@ fn f2f(x: f32) -> i32 {
 // Multiply a number by 4096
 fn fsh(x: i32) -> i32 {
     return x << 12u;
-}
-
-fn dequantize(qtable: u32, value: u32) -> i32 {
-    return metadata.qtables[qtable].values[value];
-}
-
-fn huff_extend(v: i32, t: u32) -> i32 {
-    let vt = 1 << (t - 1u);
-    return select(v, v + (-1 << t) + 1, v < vt);
-}
-
-fn unzigzag(pos: u32) -> u32 {
-    if pos >= 64u {
-        return 63u;
-    } else {
-        return metadata.unzigzag[pos];
-    }
 }

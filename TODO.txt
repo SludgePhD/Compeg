@@ -1,1 +1,2 @@
 - do start position computation and 0xFF 0x00 escaping on the CPU using SIMD
+- use `override` in the shader once naga supports that, and make the shader more flexible
