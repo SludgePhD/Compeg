@@ -12,9 +12,9 @@ struct Component {
     hsample: u32,
     // Quantization table index to use for coefficients (in `metadata.qtables`).
     qtable: u32,
-    // Table index in `huffman_luts` to use for the DC coefficients.
+    // Table index in `huffman_l1` to use for the DC coefficients.
     dchuff: u32,
-    // Table index in `huffman_luts` to use for the AC coefficients.
+    // Table index in `huffman_l1` to use for the AC coefficients.
     achuff: u32,
 }
 
@@ -32,9 +32,9 @@ struct Metadata {
     unzigzag: array<u32, 64>,
 }
 
-struct HuffmanTable {
+struct HuffmanLutL1 {
     // 2 16-bit entries each
-    lut: array<u32, 32768>,
+    entries: array<u32, 128>,
 }
 
 @group(0) @binding(0) var<storage, read> metadata: Metadata;
@@ -44,19 +44,22 @@ struct HuffmanTable {
 // Index 0 AC
 // Index 1 DC
 // Index 1 AC
-@group(0) @binding(1) var<storage, read> huffman_luts: array<HuffmanTable, 4>;
+@group(0) @binding(1) var<storage, read> huffman_l1: array<HuffmanLutL1, 4>;
+
+// Level-2 LUT for huffman codes longer than 8 bits. See `huffman.rs` for more detail.
+@group(0) @binding(2) var<storage, read> huffman_l2: array<u32>;
 
 // The preprocessed JPEG scan data.
 // This is raw byte data, but packed into `u32`s, since WebGPU doesn't have `u8`.
 // The preprocessing removes all RST markers, replaces all byte-stuffed 0xFF 0x00 sequences with
 // just 0xFF, and aligns every restart interval on a `u32` boundary so that the shader doesn't have
 // to do unnecessary bytewise processing.
-@group(0) @binding(2) var<storage, read> scan_data: array<u32>;
+@group(0) @binding(3) var<storage, read> scan_data: array<u32>;
 
 // List of word indices in `scan_data` where restart intervals begin.
-@group(0) @binding(3) var<storage, read> start_positions: array<u32>;
+@group(0) @binding(4) var<storage, read> start_positions: array<u32>;
 
-@group(0) @binding(4) var out: texture_storage_2d<rgba8uint, write>;
+@group(0) @binding(5) var out: texture_storage_2d<rgba8uint, write>;
 
 
 struct BitStreamState {
@@ -110,20 +113,33 @@ fn peek(n: u32) -> u32 {
 // Precondition: At least 16 bits left in the reader.
 // Postcondition: Consumes up to 16 bits from the bit stream without refilling it.
 fn huffdecode(table: u32) -> u32 {
-    // Huffman LUTs are generated to be indexed by the top 16 bits in the buffer. But we store 2
-    // 16-bit entries in the same word, so we have to fetch 2 entries at once.
-    let idx = bitstate.cur >> 16u;
+    // The level-1 LUT is index by the most significant 8 bits. But we store 2 16-bit entries in the
+    // same word, so we have to fetch 2 entries at once.
+    let code = bitstate.cur >> 16u;
 
-    var entry = huffman_luts[table].lut[idx >> 1u];
+    let l1idx = code >> 8u;
+    var entry = huffman_l1[table].entries[l1idx >> 1u];
 
     // LSB order, so the low half stores the first entry, the high half the second
-    entry = (entry >> ((idx & 1u) * 16u)) & 0xffffu;
+    entry = (entry >> ((l1idx & 1u) * 16u)) & 0xffffu;
 
-    // First byte = Number of bits to consume.
-    consume(entry & 0xffu);
+    // Now, if the MSB is clear, this entry directly stores the lookup value.
+    // If the MSB is set, however, we need to access the level-2 LUT.
+    if (entry & 0x8000u) != 0u {
+        let l2idx = (entry & 0x7fffu) + (code & 0xffu);
+        entry = huffman_l2[l2idx >> 1u];
 
-    // Second byte = Decode result.
-    return entry >> 8u;
+        entry = (entry >> ((l2idx & 1u) * 16u)) & 0xffffu;
+    }
+
+    // First byte = The decoded value.
+    let value = entry & 0xffu;
+
+    // Second byte = Number of bits to consume.
+    let bits = entry >> 8u;
+
+    consume(bits);
+    return value;
 }
 
 struct DataUnitBuf {

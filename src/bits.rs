@@ -55,7 +55,7 @@ impl<'a> BitStream<'a> {
 
     fn huffdecode(&mut self, table: &TableData) -> u8 {
         assert!(self.left >= 16);
-        let res = table.lookup_msb((self.cur >> 16) as u16);
+        let res = table.lookup((self.cur >> 16) as u16);
         self.consume(res.bits().into());
         res.value()
     }

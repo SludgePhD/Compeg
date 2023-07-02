@@ -86,7 +86,7 @@ impl Gpu {
                         },
                         count: None,
                     },
-                    // `huffman_luts`
+                    // `huffman_l1`
                     BindGroupLayoutEntry {
                         binding: 1,
                         visibility: ShaderStages::COMPUTE,
@@ -97,7 +97,7 @@ impl Gpu {
                         },
                         count: None,
                     },
-                    // `scan_data`
+                    // `huffman_l2`
                     BindGroupLayoutEntry {
                         binding: 2,
                         visibility: ShaderStages::COMPUTE,
@@ -108,7 +108,7 @@ impl Gpu {
                         },
                         count: None,
                     },
-                    // `scan_positions`
+                    // `scan_data`
                     BindGroupLayoutEntry {
                         binding: 3,
                         visibility: ShaderStages::COMPUTE,
@@ -119,9 +119,20 @@ impl Gpu {
                         },
                         count: None,
                     },
-                    // `out`
+                    // `scan_positions`
                     BindGroupLayoutEntry {
                         binding: 4,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // `out`
+                    BindGroupLayoutEntry {
+                        binding: 5,
                         visibility: ShaderStages::COMPUTE,
                         ty: BindingType::StorageTexture {
                             access: StorageTextureAccess::WriteOnly,
@@ -159,7 +170,8 @@ impl Gpu {
 pub struct Decoder {
     gpu: Arc<Gpu>,
     metadata: Buffer,
-    huffman_tables: Buffer,
+    huffman_l1: Buffer,
+    huffman_l2: DynamicBuffer,
     /// Holds all the scan data of the JPEG (including all embedded RST markers). This constitutes
     /// the main input data to the shader pipeline.
     scan_data: DynamicBuffer,
@@ -174,15 +186,20 @@ impl Decoder {
         let metadata = gpu.device.create_buffer(&BufferDescriptor {
             label: Some("metadata"),
             size: mem::size_of::<metadata::Metadata>() as u64,
-            usage: BufferUsages::COPY_DST | BufferUsages::COPY_SRC | BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let huffman_tables = gpu.device.create_buffer(&BufferDescriptor {
-            label: Some("huffman_tables"),
-            size: HuffmanTables::TOTAL_SIZE as u64,
             usage: BufferUsages::COPY_DST | BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+        let huffman_l1 = gpu.device.create_buffer(&BufferDescriptor {
+            label: Some("huffman_l1"),
+            size: HuffmanTables::TOTAL_L1_SIZE as u64,
+            usage: BufferUsages::COPY_DST | BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let huffman_l2 = DynamicBuffer::new(
+            gpu.clone(),
+            "huffman_l2",
+            BufferUsages::COPY_DST | BufferUsages::STORAGE,
+        );
 
         let scan_data = DynamicBuffer::new(
             gpu.clone(),
@@ -192,7 +209,7 @@ impl Decoder {
         let start_positions_buffer = DynamicBuffer::new(
             gpu.clone(),
             "start_positions",
-            BufferUsages::COPY_DST | BufferUsages::COPY_SRC | BufferUsages::STORAGE,
+            BufferUsages::COPY_DST | BufferUsages::STORAGE,
         );
 
         let output = DynamicTexture::new(
@@ -211,7 +228,8 @@ impl Decoder {
         Self {
             gpu,
             metadata,
-            huffman_tables,
+            huffman_l1,
+            huffman_l2,
             scan_data,
             start_positions_buffer,
             output,
@@ -237,11 +255,10 @@ impl Decoder {
             self.start_positions_buffer
                 .write(self.scan_buffer.start_positions());
 
-            self.gpu.queue.write_buffer(
-                &self.huffman_tables,
-                0,
-                bytemuck::bytes_of(data.huffman_tables.raw()),
-            );
+            self.gpu
+                .queue
+                .write_buffer(&self.huffman_l1, 0, data.huffman_tables.l1_data());
+            self.huffman_l2.write(data.huffman_tables.l2_data());
         });
 
         let mut enc = self
@@ -251,7 +268,8 @@ impl Decoder {
 
         let bind_group = self.shared_bind_group.bind_group(&[
             self.metadata.as_entire_binding().into(),
-            self.huffman_tables.as_entire_binding().into(),
+            self.huffman_l1.as_entire_binding().into(),
+            self.huffman_l2.as_resource(),
             self.scan_data.as_resource(),
             self.start_positions_buffer.as_resource(),
             self.output.as_resource(),
@@ -330,7 +348,12 @@ impl<'a> ImageData<'a> {
 
         let mut size = None;
         let mut ri = None;
-        let mut huffman_tables = HuffmanTables::new();
+        let mut huffman_tables = [
+            TableData::default_luminance_dc(),
+            TableData::default_luminance_ac(),
+            TableData::default_chrominance_dc(),
+            TableData::default_chrominance_ac(),
+        ];
         let mut qtables = [QTable::zeroed(); 4];
         let mut scan_data = None;
         let mut components = None;
@@ -433,7 +456,7 @@ impl<'a> ImageData<'a> {
 
                         let index = (index << 1) | class;
                         let data = TableData::build(table.Li(), table.Vij());
-                        huffman_tables.set(index, &data);
+                        huffman_tables[usize::from(index)] = data;
                     }
                 }
                 SegmentKind::Dri(dri) => {
@@ -503,6 +526,8 @@ impl<'a> ImageData<'a> {
             max_vsample,
             unzigzag: UNZIGZAG,
         };
+
+        let huffman_tables = HuffmanTables::new(huffman_tables);
 
         Ok(Self {
             metadata,

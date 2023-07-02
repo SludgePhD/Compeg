@@ -3,18 +3,24 @@ use std::mem;
 
 use bytemuck::{Pod, Zeroable};
 
-const LUT_LEN: usize = u16::MAX as usize + 1; // u16::MAX must be a valid index (16 1 bits is a valid huffman code)
-
 pub struct TableData {
-    // *MASSIVELY* wasteful encoding, but with mediocre PC ports requiring 12 GB of VRAM I think I'll be fine :)
-    codes: Box<[LookupResult; LUT_LEN]>,
+    /// The L1 table stores entries for all codes with 8 or fewer bits.
+    ///
+    /// For all codes with more than 8 bits, this table indicates the start index in the L2 table
+    /// where the next 8 bits of the code should be looked up.
+    l1: Box<[L1Entry; 256]>,
+    l2: Vec<LookupResult>,
 }
 
 impl TableData {
-    #[allow(dead_code)]
     pub fn build(num_codes_per_length: &[u8; 16], codes: &[u8]) -> Self {
-        // First, generate all huffman codes from the inputs.
-        let mut out = Box::new([LookupResult::new(0, 0); LUT_LEN]);
+        enum Slot {
+            L1(L1Entry),
+            L2(Box<[LookupResult; 256]>),
+        }
+
+        const EMPTY: Slot = Slot::L1(L1Entry::NULL);
+        let mut map = Box::new([EMPTY; 256]);
 
         // The following is similar in function to the flowcharts in Annex C
         // (`Generate_size_table` and `Generate_code_table`)
@@ -25,32 +31,145 @@ impl TableData {
 
             next_code <<= 1;
 
-            for _ in 0..code_count {
-                let lookup_result = LookupResult::new(code_length, *code_iter.next().unwrap());
+            if code_length <= 8 {
+                // These codes only have to be added to the level-1 LUT.
+                for _ in 0..code_count {
+                    let lookup_result = LookupResult::new(code_length, *code_iter.next().unwrap());
 
-                // Because we want to be able to access this `LookupResult` by indexing an array
-                // with a `u16`, the most significant bits of which contain the huffman code,
-                // we need to set multiple slots in that table to the code.
-                let padded_code = next_code << (16 - code_length);
+                    // Because we want to be able to access the level-1 table with a `u8` containing the
+                    // huffman code in its MSBs, we might need to allocate more than one slot.
+                    let padded_code = next_code << (8 - code_length);
 
-                // For a 16-bit code, there's only 1 slot, for a 2-bit code, there's 2^14 slots to set.
-                let duplicates = 1 << (16 - code_length);
-                for l in 0..duplicates {
-                    out[usize::from(padded_code | l)] = lookup_result;
+                    // For an 8-bit code, there's only 1 slot, for a 2-bit code, there's 2^6 slots to set.
+                    let copies = 1 << (8 - code_length);
+                    for l in 0..copies {
+                        map[usize::from(padded_code | l)] =
+                            Slot::L1(L1Entry::immediate(lookup_result));
+                    }
+
+                    next_code += 1;
                 }
-                next_code += 1;
+            } else {
+                // These codes need 1 delegate entry in the level-1 LUT, and some number of entries
+                // in the level-2 LUT.
+
+                for _ in 0..code_count {
+                    let lookup_result = LookupResult::new(code_length, *code_iter.next().unwrap());
+
+                    let msb = usize::from(next_code >> (code_length - 8));
+                    if let Slot::L1(entry) = map[msb] {
+                        assert_eq!(entry, L1Entry::NULL);
+                        map[msb] = Slot::L2(Box::new([LookupResult::NULL; 256]));
+                    }
+                    let l2 = match &mut map[msb] {
+                        Slot::L1(_) => unreachable!(),
+                        Slot::L2(l2) => l2,
+                    };
+
+                    // For codes that are longer than 8 bits, we have to allocate 1 slot in the
+                    // first-level table, and some number in the second.
+
+                    // Pad the code to align it with the MSB again.
+                    let padded_code = next_code << (16 - code_length);
+
+                    let lsb = usize::from(padded_code & 0xff);
+
+                    // For a 16-bit code, there's only 1 slot, for a 10-bit code, there's 2^6 slots to set.
+                    let copies = 1 << (16 - code_length);
+                    for l in 0..copies {
+                        assert_eq!(l2[lsb | l], LookupResult::NULL);
+                        l2[lsb | l] = lookup_result;
+                    }
+
+                    next_code += 1;
+                }
             }
         }
 
-        Self { codes: out }
+        let mut l1 = Box::new([L1Entry::NULL; 256]);
+        let mut l2 = Vec::new();
+        for (i, slot) in map.into_iter().enumerate() {
+            match slot {
+                Slot::L1(entry) => l1[i] = entry,
+                Slot::L2(list) => {
+                    l1[i] = L1Entry::delegate(l2.len().try_into().unwrap());
+                    l2.extend(list.into_iter());
+                }
+            }
+        }
+
+        Self { l1, l2 }
     }
 
-    pub fn lookup_msb(&self, msb: u16) -> LookupResult {
-        self.codes[msb as usize]
+    pub fn default_luminance_dc() -> Self {
+        Self::build(
+            &[0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+            &[
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+            ],
+        )
     }
 
-    fn raw(&self) -> &[LookupResult; LUT_LEN] {
-        &self.codes
+    pub fn default_luminance_ac() -> Self {
+        Self::build(
+            &[0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125],
+            &[
+                0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51,
+                0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08, 0x23, 0x42, 0xb1, 0xc1,
+                0x15, 0x52, 0xd1, 0xf0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16, 0x17, 0x18,
+                0x19, 0x1a, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
+                0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57,
+                0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75,
+                0x76, 0x77, 0x78, 0x79, 0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92,
+                0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+                0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3,
+                0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8,
+                0xd9, 0xda, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf1, 0xf2,
+                0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa,
+            ],
+        )
+    }
+
+    pub fn default_chrominance_dc() -> Self {
+        Self::build(
+            &[0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0],
+            &[
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+            ],
+        )
+    }
+
+    pub fn default_chrominance_ac() -> Self {
+        Self::build(
+            &[0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 119],
+            &[
+                0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31, 0x06, 0x12, 0x41, 0x51, 0x07,
+                0x61, 0x71, 0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91, 0xa1, 0xb1, 0xc1, 0x09,
+                0x23, 0x33, 0x52, 0xf0, 0x15, 0x62, 0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34, 0xe1, 0x25,
+                0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38,
+                0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56,
+                0x57, 0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74,
+                0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
+                0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5,
+                0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba,
+                0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6,
+                0xd7, 0xd8, 0xd9, 0xda, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2,
+                0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa,
+            ],
+        )
+    }
+
+    /// Looks up a huffman code stored in the most significant bits of a `u16`.
+    pub fn lookup(&self, code: u16) -> LookupResult {
+        let l1 = self.l1[usize::from(code >> 8)];
+        match l1.result() {
+            Ok(res) => res,
+            Err(offset) => {
+                // Level-2 lookup is needed.
+                let index = usize::from(offset) + usize::from(code & 0xff);
+                self.l2[index]
+            }
+        }
     }
 
     fn iter(&self) -> impl Iterator<Item = (u16, LookupResult)> {
@@ -59,13 +178,22 @@ impl TableData {
         // Starting at all-0, iterate through the table while skipping over long runs of duplicate entries.
         let mut cur = 0u16;
         loop {
-            let code = self.codes[usize::from(cur)];
+            let code = self.lookup(cur);
             if code.bits == 0 {
-                break;
+                match cur.checked_add(1) {
+                    Some(next) => {
+                        cur = next;
+                        continue;
+                    }
+                    None => break,
+                }
             }
 
             out.push((cur >> (16 - code.bits), code));
-            cur += 1 << (16 - code.bits);
+            match cur.checked_add(1 << (16 - code.bits)) {
+                Some(next) => cur = next,
+                None => break,
+            }
         }
 
         out.into_iter()
@@ -86,101 +214,109 @@ impl fmt::Debug for TableData {
     }
 }
 
-/// Storage of all 4 huffman tables that are involved in JPEG decoding.
+/// Stores all 4 huffman tables that are involved in JPEG decoding.
 pub struct HuffmanTables {
-    codes: Box<[LookupResult; LUT_LEN * 4]>,
+    l1: Box<[L1Entry; 256 * 4]>,
+    l2: Vec<LookupResult>,
 }
 
 impl HuffmanTables {
-    pub const TOTAL_SIZE: usize = LUT_LEN * 4 * mem::size_of::<LookupResult>();
+    pub const TOTAL_L1_SIZE: usize = 256 * 4 * mem::size_of::<L1Entry>();
 
-    pub fn new() -> Self {
-        type TData = (&'static [u8; 16], &'static [u8]);
-        const DEFAULT_LUMINANCE_DC: TData = (
-            &[0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
-            &[
-                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
-            ],
-        );
-        const DEFAULT_LUMINANCE_AC: TData = (
-            &[0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125],
-            &[
-                0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51,
-                0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08, 0x23, 0x42, 0xb1, 0xc1,
-                0x15, 0x52, 0xd1, 0xf0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16, 0x17, 0x18,
-                0x19, 0x1a, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
-                0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57,
-                0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75,
-                0x76, 0x77, 0x78, 0x79, 0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92,
-                0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
-                0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3,
-                0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8,
-                0xd9, 0xda, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf1, 0xf2,
-                0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa,
-            ],
-        );
-        const DEFAULT_CHROMINANCE_DC: TData = (
-            &[0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0],
-            &[
-                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
-            ],
-        );
-        const DEFAULT_CHROMINANCE_AC: TData = (
-            &[0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 119],
-            &[
-                0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31, 0x06, 0x12, 0x41, 0x51, 0x07,
-                0x61, 0x71, 0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91, 0xa1, 0xb1, 0xc1, 0x09,
-                0x23, 0x33, 0x52, 0xf0, 0x15, 0x62, 0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34, 0xe1, 0x25,
-                0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38,
-                0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56,
-                0x57, 0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74,
-                0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
-                0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5,
-                0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba,
-                0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6,
-                0xd7, 0xd8, 0xd9, 0xda, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2,
-                0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa,
-            ],
-        );
+    pub fn new(mut tables: [TableData; 4]) -> Self {
+        // We're about to concat all the L2 LUTs, so adjust all offsets in the L1 LUT accordingly.
+        let mut offset = 0;
+        for (i, tbl) in tables.iter_mut().enumerate() {
+            if i != 0 {
+                for e in &mut tbl.l1[..] {
+                    *e = e.offset(offset.try_into().unwrap());
+                }
+            }
+            offset += tbl.l2.len();
+        }
 
-        let mut codes: Box<[LookupResult; LUT_LEN * 4]> = vec![LookupResult::ZERO; LUT_LEN * 4]
-            .into_boxed_slice()
-            .try_into()
-            .map_err(drop)
-            .unwrap();
+        let mut l1 = Box::new([L1Entry::NULL; 256 * 4]);
+        l1[256 * 0..256 * 1].copy_from_slice(&tables[0].l1[..]);
+        l1[256 * 1..256 * 2].copy_from_slice(&tables[1].l1[..]);
+        l1[256 * 2..256 * 3].copy_from_slice(&tables[2].l1[..]);
+        l1[256 * 3..256 * 4].copy_from_slice(&tables[3].l1[..]);
 
-        let luma_dc = TableData::build(DEFAULT_LUMINANCE_DC.0, DEFAULT_LUMINANCE_DC.1);
-        let luma_ac = TableData::build(DEFAULT_LUMINANCE_AC.0, DEFAULT_LUMINANCE_AC.1);
-        let chroma_dc = TableData::build(DEFAULT_CHROMINANCE_DC.0, DEFAULT_CHROMINANCE_DC.1);
-        let chroma_ac = TableData::build(DEFAULT_CHROMINANCE_AC.0, DEFAULT_CHROMINANCE_AC.1);
-        codes[0..LUT_LEN].copy_from_slice(luma_dc.raw());
-        codes[LUT_LEN..LUT_LEN * 2].copy_from_slice(luma_ac.raw());
-        codes[LUT_LEN * 2..LUT_LEN * 3].copy_from_slice(chroma_dc.raw());
-        codes[LUT_LEN * 3..LUT_LEN * 4].copy_from_slice(chroma_ac.raw());
-        Self { codes }
+        let mut l2 = Vec::new();
+        l2.append(&mut tables[0].l2);
+        l2.append(&mut tables[1].l2);
+        l2.append(&mut tables[2].l2);
+        l2.append(&mut tables[3].l2);
+        Self { l1, l2 }
     }
 
-    pub fn set(&mut self, index: u8, data: &TableData) {
-        let index = usize::from(index);
-        self.codes[LUT_LEN * index..LUT_LEN * (index + 1)].copy_from_slice(data.raw());
+    pub fn l1_data(&self) -> &[u8] {
+        bytemuck::cast_slice(&self.l1[..])
     }
 
-    pub fn raw(&self) -> &[LookupResult; LUT_LEN * 4] {
-        &self.codes
+    pub fn l2_data(&self) -> &[u8] {
+        bytemuck::cast_slice(&self.l2)
     }
 }
 
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
+struct L1Entry(u16);
+
+impl L1Entry {
+    const NULL: Self = Self(0);
+
+    fn immediate(res: LookupResult) -> Self {
+        assert!(res.bits <= 16);
+        Self(u16::from(res.bits) << 8 | u16::from(res.value))
+    }
+
+    fn delegate(slot: u16) -> Self {
+        assert_eq!(slot & 0x7fff, slot);
+        Self(slot | 0x8000)
+    }
+
+    fn result(&self) -> Result<LookupResult, u16> {
+        if self.0 & 0x8000 == 0 {
+            // If the MSB is clear, this directly contains the lookup value.
+            Ok(LookupResult {
+                bits: (self.0 >> 8) as u8,
+                value: self.0 as u8,
+            })
+        } else {
+            // If the MSB is set, a lookup in the second-level table is needed.
+            // The remaining 15 bits indicate the starting index in that table.
+            Err(self.0 & 0x7fff)
+        }
+    }
+
+    fn offset(self, offset: u16) -> Self {
+        match self.result() {
+            Ok(imm) => Self::immediate(imm),
+            Err(start) => Self::delegate(start.checked_add(offset).unwrap()),
+        }
+    }
+}
+
+impl fmt::Debug for L1Entry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("L1Entry")
+            .field("raw", &format!("{:04x}", self.0))
+            .field("result", &self.result())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct LookupResult {
-    /// Length of the huffman code in bits (number of bits that need to be consumed from the input).
-    bits: u8,
     /// Decoded value. Meaning depends on table class (AC/DC).
     value: u8,
+    /// Length of the huffman code in bits (number of bits that need to be consumed from the input).
+    bits: u8,
 }
 
 impl LookupResult {
-    const ZERO: Self = Self { bits: 0, value: 0 };
+    const NULL: Self = Self { bits: 0, value: 0 };
 
     fn new(bits: u8, value: u8) -> Self {
         Self { bits, value }
@@ -201,13 +337,7 @@ mod tests {
 
     #[test]
     fn tablegen() {
-        // Default Luminance DC table.
-        let num_dc_codes = [0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0];
-        let dc_values = [
-            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
-        ];
-
-        let tbl = TableData::build(&num_dc_codes, &dc_values);
+        let tbl = TableData::default_luminance_dc();
         expect_test::expect![[r#"
             00 -> 00
             010 -> 01
@@ -227,24 +357,7 @@ mod tests {
 
     #[test]
     fn tablegen_large() {
-        // Default luminance AC table.
-        let num_ac_codes = [0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125];
-        let ac_values = [
-            0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51,
-            0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08, 0x23, 0x42, 0xb1, 0xc1,
-            0x15, 0x52, 0xd1, 0xf0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16, 0x17, 0x18,
-            0x19, 0x1a, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
-            0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57,
-            0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75,
-            0x76, 0x77, 0x78, 0x79, 0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92,
-            0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
-            0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3,
-            0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8,
-            0xd9, 0xda, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf1, 0xf2,
-            0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa,
-        ];
-
-        let tbl = TableData::build(&num_ac_codes, &ac_values);
+        let tbl = TableData::default_luminance_ac();
         expect_test::expect![[r#"
             00 -> 01
             01 -> 02
