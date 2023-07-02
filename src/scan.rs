@@ -61,20 +61,15 @@ impl ScanBuffer {
                         out[write_ptr] = 0xff;
                         write_ptr += 1;
                     }
-                    Some(0xD0..=0xD7) => {
-                        // RST marker.
+                    Some(_) => {
+                        // RST marker. We don't check the exact marker type to improve perf. Only
+                        // RST is valid here.
 
                         // Align the next restart interval on a 4-byte boundary.
                         write_ptr = (write_ptr + 0b11) & !0b11;
 
                         self.start_positions[ri & start_pos_index_mask] = (write_ptr / 4) as u32;
                         ri += 1;
-                    }
-                    Some(inv) => {
-                        return Err(Error::from(format!(
-                            "invalid marker 0x{:02x} found in scan data",
-                            inv
-                        )));
                     }
                     None => break,
                 },
@@ -85,7 +80,9 @@ impl ScanBuffer {
                 None => break,
             }
         }
+
         self.words.truncate((write_ptr + 3) / 4);
+        self.start_positions.truncate(ri);
 
         if ri != expected_restart_intervals as usize {
             return Err(Error::from(format!(
@@ -93,7 +90,6 @@ impl ScanBuffer {
                 ri, expected_restart_intervals
             )));
         }
-        self.start_positions.truncate(ri);
 
         Ok(())
     }
