@@ -50,44 +50,15 @@ impl ScanBuffer {
 
         let out: &mut [u8] = bytemuck::cast_slice_mut(&mut self.words);
 
-        let mut ri = 1;
-        let mut write_ptr = 0;
-        let mut bytes = scan_data.iter().copied();
-        loop {
-            match bytes.next() {
-                Some(0xff) => match bytes.next() {
-                    Some(0x00) => {
-                        // Byte stuffing sequence, push only `0xFF` to the output.
-                        out[write_ptr] = 0xff;
-                        write_ptr += 1;
-                    }
-                    Some(_) => {
-                        // RST marker. We don't check the exact marker type to improve perf. Only
-                        // RST is valid here.
+        let res = preprocess_scalar(out, &mut self.start_positions, scan_data);
 
-                        // Align the next restart interval on a 4-byte boundary.
-                        write_ptr = (write_ptr + 0b11) & !0b11;
+        self.words.truncate((res.bytes_out + 3) / 4);
+        self.start_positions.truncate(res.ri);
 
-                        self.start_positions[ri & start_pos_index_mask] = (write_ptr / 4) as u32;
-                        ri += 1;
-                    }
-                    None => break,
-                },
-                Some(byte) => {
-                    out[write_ptr] = byte;
-                    write_ptr += 1;
-                }
-                None => break,
-            }
-        }
-
-        self.words.truncate((write_ptr + 3) / 4);
-        self.start_positions.truncate(ri);
-
-        if ri != expected_restart_intervals as usize {
+        if res.ri != expected_restart_intervals as usize {
             return Err(Error::from(format!(
                 "restart interval count mismatch: counted {}, expected {}",
-                ri, expected_restart_intervals
+                res.ri, expected_restart_intervals
             )));
         }
 
@@ -102,6 +73,57 @@ impl ScanBuffer {
     /// Returns the computed start positions, ready for upload to GPU memory.
     pub fn start_positions(&self) -> &[u8] {
         bytemuck::cast_slice(&self.start_positions)
+    }
+}
+
+struct PreprocessResult {
+    ri: usize,
+    bytes_out: usize,
+}
+
+#[inline(never)]
+fn preprocess_scalar(
+    out: &mut [u8],
+    start_positions: &mut [u32],
+    scan_data: &[u8],
+) -> PreprocessResult {
+    assert!(start_positions.len().is_power_of_two());
+    let start_pos_mask = start_positions.len() - 1;
+
+    let mut ri = 1; // One at index 0 is already written.
+    let mut write_ptr = 0;
+    let mut bytes = scan_data.iter().copied();
+    loop {
+        match bytes.next() {
+            Some(0xff) => match bytes.next() {
+                Some(0x00) => {
+                    // Byte stuffing sequence, push only `0xFF` to the output.
+                    out[write_ptr] = 0xff;
+                    write_ptr += 1;
+                }
+                Some(_) => {
+                    // RST marker. We don't check the exact marker type to improve perf. Only
+                    // RST is valid here.
+
+                    // Align the next restart interval on a 4-byte boundary.
+                    write_ptr = (write_ptr + 0b11) & !0b11;
+
+                    start_positions[ri & start_pos_mask] = (write_ptr / 4) as u32;
+                    ri += 1;
+                }
+                None => break,
+            },
+            Some(byte) => {
+                out[write_ptr] = byte;
+                write_ptr += 1;
+            }
+            None => break,
+        }
+    }
+
+    PreprocessResult {
+        ri,
+        bytes_out: write_ptr,
     }
 }
 
