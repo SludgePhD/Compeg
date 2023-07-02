@@ -37,8 +37,9 @@ impl ScanBuffer {
     ) -> crate::Result<()> {
         // The RST markers are removed from `scan_data`, but each restart interval is padded to
         // start on a 32-bit boundary. That means at worst a 1-byte restart interval preceded by a
-        // 2-byte RST marker will occupy one word and waste 1 additional byte in there, so we have
-        // to allocate an extra 1/3rd of the input data length in the output buffer.
+        // 2-byte RST marker will occupy one word and waste 3 bytes in there.
+        // This is 1 more byte than the input had, so we have to allocate an extra 1/3rd of the
+        // input data length in the output buffer.
         let out_bytes = scan_data.len() + scan_data.len() / 3;
         self.words.resize((out_bytes + 3) / 4, 0);
 
@@ -92,6 +93,7 @@ impl ScanBuffer {
                 ri, expected_restart_intervals
             )));
         }
+        self.start_positions.truncate(ri);
 
         Ok(())
     }
