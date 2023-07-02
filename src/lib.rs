@@ -18,7 +18,6 @@ use bytemuck::Zeroable;
 use dynamic::DynamicBindGroup;
 use error::{Error, Result};
 use file::{JpegParser, SegmentKind};
-use scan::ScanBuffer;
 use wgpu::*;
 
 use crate::{
@@ -27,6 +26,9 @@ use crate::{
     huffman::{HuffmanTables, TableData},
     metadata::{QTable, UNZIGZAG},
 };
+
+// Public for benchmarks only.
+pub use scan::ScanBuffer;
 
 const OUTPUT_FORMAT: TextureFormat = TextureFormat::Rgba8Uint;
 const WORKGROUP_SIZE: u32 = 64;

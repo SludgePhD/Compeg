@@ -16,3 +16,8 @@ anyhow = "1.0.71"
 pollster = "0.3.0"
 fastrand = "2.0.0"
 linuxvideo = "0.3.0"
+criterion = { version = "0.5.1", default-features = false }
+
+[[bench]]
+name = "bench"
+harness = false
