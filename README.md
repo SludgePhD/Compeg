@@ -11,3 +11,8 @@ machine I wanted to use this on ended up with 100-200ms frame times, which,
 to put it mildly, is "not very good".
 
 The quest for faster JPEGs continues.
+
+Addendum: according to the official technical specifications, the RX 6700 XT
+does indeed have a pixel/texture fill rate that is about 10-20x higher than what
+the 12th gen Intel iGPU (UHD Graphics 770) is advertised as, so the numbers seem
+to check out.
