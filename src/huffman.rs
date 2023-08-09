@@ -1,3 +1,20 @@
+//! LUT-based huffman decoder.
+//!
+//! The huffman tables stored in the JPEG stream are converted to a 2-level lookup table by
+//! [`TableData::build`]. [`TableData::lookup`] can then be used to perform a table lookup for an
+//! input code. The compute shader has its own version of that `lookup` function.
+//!
+//! A single-level LUT would also work, but would be larger and less cache-friendly: since huffman
+//! codes are up to 16 bits in length, and each lookup result requires 2 bytes (1 byte for the
+//! decoded result, 1 byte to store the number of bits to consume from the input), each table would
+//! be 128 KB in size (and baseline JPEGs use 4 tables).
+//!
+//! The 2-level LUT improves on this by using a level-1 table with 256 entries. The table is indexed
+//! by the first 8 bits of the input huffman code and returns an entry that either directly stores
+//! the decoded value (if the huffman code is at most 8 bits long), or it indicates the start index
+//! in the level-2 table, which is then indexed by the next 8 bits of the input huffman code (for
+//! codes that are longer than 8 bits).
+
 use core::fmt;
 use std::mem;
 
@@ -221,6 +238,10 @@ pub struct HuffmanTables {
 }
 
 impl HuffmanTables {
+    /// The total size (in Bytes) of the 4 first-level huffman LUTs.
+    ///
+    /// The first-level tables occupy a fixed amount of space, while the second-level tables use a
+    /// dynamic amount of space.
     pub const TOTAL_L1_SIZE: usize = 256 * 4 * mem::size_of::<L1Entry>();
 
     pub fn new(mut tables: [TableData; 4]) -> Self {

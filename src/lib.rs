@@ -1,3 +1,15 @@
+//! WebGPU compute shader JPEG decoder.
+//!
+//! Usage:
+//!
+//! - Create a [`Gpu`] context (either automatically via [`Gpu::open`] or from an existing [`wgpu`] context via [`Gpu::from_wgpu`]).
+//! - Create a [`Decoder`] (or multiple) via [`Decoder::new`].
+//! - For each JPEG image you want to decode, create an [`ImageData`] object and pass it to [`Decoder::start_decode`].
+//!   - The [`Decoder`] will automatically resize buffers and textures when they are too small for the passed [`ImageData`].
+//! - Access the output [`Texture`] via [`DecodeOp::texture`].
+//!   - [`wgpu`] will automatically ensure that the proper barriers are in place when this
+//!     [`Texture`] is used in a GPU operation.
+
 mod bits;
 mod dynamic;
 mod error;
@@ -27,7 +39,8 @@ use crate::{
     metadata::{QTable, UNZIGZAG},
 };
 
-// Public for benchmarks only.
+/// **Not** part of the public API. Used for benchmarks only.
+#[doc(hidden)]
 pub use scan::ScanBuffer;
 
 const OUTPUT_FORMAT: TextureFormat = TextureFormat::Rgba8Uint;
@@ -44,11 +57,7 @@ pub struct Gpu {
 }
 
 impl Gpu {
-    pub fn device_descriptor() -> DeviceDescriptor<'static> {
-        // We're back to vanilla WebGPU for now (since the sort shader removal).
-        DeviceDescriptor::default()
-    }
-
+    /// Opens a suitable default GPU.
     pub async fn open() -> Result<Self> {
         let instance = Instance::new(InstanceDescriptor {
             // The OpenGL backend panics spuriously, so don't enable it.
@@ -60,13 +69,14 @@ impl Gpu {
             .await
             .ok_or_else(|| Error::from("no supported graphics adapter found"))?;
         let (device, queue) = adapter
-            .request_device(&Self::device_descriptor(), None)
+            .request_device(&Default::default(), None)
             .await
             .map_err(|_| Error::from("no supported graphics device found"))?;
 
         Self::from_wgpu(device.into(), queue.into())
     }
 
+    /// Creates a [`Gpu`] handle from an existing [`wgpu`] [`Device`] and [`Queue`].
     pub fn from_wgpu(device: Arc<Device>, queue: Arc<Queue>) -> Result<Self> {
         let shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("main_shader"),
@@ -184,6 +194,12 @@ pub struct Decoder {
 }
 
 impl Decoder {
+    /// [`wgpu`] only guarantees that it is able to dispatch 65535 workgroups at once, so this is
+    /// the maximum number of shader invocations we can run (and thus the max. number of restart
+    /// intervals we can process).
+    const MAX_RESTART_INTERVALS: u32 = WORKGROUP_SIZE * 65535;
+
+    /// Creates a new JPEG decoding context on the given [`Gpu`].
     pub fn new(gpu: Arc<Gpu>) -> Self {
         let metadata = gpu.device.create_buffer(&BufferDescriptor {
             label: Some("metadata"),
@@ -240,8 +256,11 @@ impl Decoder {
         }
     }
 
-    pub fn start_decode(&mut self, data: &ImageData<'_>) {
-        self.output.reserve(data.width(), data.height());
+    /// Preprocesses and uploads a JPEG image, and dispatches the decoding operation on the GPU.
+    ///
+    /// Returns a [`DecodeOp`] with information about the decode operation.
+    pub fn start_decode(&mut self, data: &ImageData<'_>) -> DecodeOp<'_> {
+        let texture_changed = self.output.reserve(data.width(), data.height());
 
         let total_restart_intervals = data.metadata.total_restart_intervals;
         let t_preprocess = time(|| {
@@ -279,9 +298,6 @@ impl Decoder {
 
         let mut compute = enc.begin_compute_pass(&ComputePassDescriptor::default());
         let workgroups = (total_restart_intervals + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-        if workgroups > 65535 {
-            panic!("restart interval count {total_restart_intervals} exceeds maximum of 65535*{WORKGROUP_SIZE}");
-        }
         compute.set_bind_group(0, bind_group, &[]);
         compute.set_pipeline(&self.gpu.jpeg_decode_pipeline);
         compute.dispatch_workgroups(workgroups, 1, 1);
@@ -295,20 +311,48 @@ impl Decoder {
         );
 
         let buffer = enc.finish();
-        let t_submit = time(|| self.gpu.queue.submit([buffer]));
-        let t_poll = time(|| self.gpu.device.poll(MaintainBase::Wait));
+        let submission = self.gpu.queue.submit([buffer]);
 
         log::trace!(
             "t_preprocess={t_preprocess:?}, \
-            t_enqueue_writes={t_enqueue_writes:?}, \
-            t_submit={t_submit:?}, \
-            t_poll={t_poll:?}"
+            t_enqueue_writes={t_enqueue_writes:?}"
         );
+
+        DecodeOp {
+            submission,
+            texture: self.output.texture(),
+            texture_changed,
+        }
     }
 
-    #[inline]
-    pub fn output(&self) -> &Texture {
-        self.output.texture()
+    /// Performs a blocking decode operation.
+    ///
+    /// This method works identically to [`Decoder::start_decode`], but will wait until the
+    /// operation on the GPU is finished.
+    ///
+    /// Note that it is not typically necessary to use this method, since [`wgpu`] will
+    /// automatically insert barriers before the target texture is accessed.
+    pub fn decode_blocking(&mut self, data: &ImageData<'_>) -> DecodeOp<'_> {
+        // FIXME: destructuring and recreation is annoyingly needed because the `DecodeOp` will
+        // borrow `self` *mutably*, even though an immutable borrow would suffice.
+        let DecodeOp {
+            submission,
+            texture: _,
+            texture_changed,
+        } = self.start_decode(data);
+        let t_poll = time(|| {
+            self.gpu
+                .device
+                .poll(MaintainBase::WaitForSubmissionIndex(submission.clone()))
+        });
+
+        log::trace!("t_poll={:?}", t_poll);
+
+        DecodeOp {
+            submission,
+            texture: self.output.texture(),
+            texture_changed,
+        }
     }
 }
 
@@ -316,6 +360,44 @@ fn time<R>(f: impl FnOnce() -> R) -> Duration {
     let start = Instant::now();
     f();
     start.elapsed()
+}
+
+/// Information about an ongoing JPEG decode operation.
+///
+/// Returned by [`Decoder::start_decode`].
+pub struct DecodeOp<'a> {
+    submission: SubmissionIndex,
+    texture: &'a Texture,
+    texture_changed: bool,
+}
+
+impl<'a> DecodeOp<'a> {
+    /// Returns the [`SubmissionIndex`] associated with the compute shader dispatch.
+    #[inline]
+    pub fn submission(&self) -> &SubmissionIndex {
+        &self.submission
+    }
+
+    /// Returns a reference to the target [`Texture`] that the JPEG decode operation is writing to.
+    ///
+    /// Note that, when using the [`Decoder`] with JPEG images of varying sizes, not the entire
+    /// target texture will be written to. The caller has to ensure to only use the area of the
+    /// [`Texture`] indicated by [`ImageData::width`] and [`ImageData::height`].
+    #[inline]
+    pub fn texture(&self) -> &Texture {
+        self.texture
+    }
+
+    /// Returns a [`bool`] indicating whether the target [`Texture`] has been reallocated since the
+    /// last decode operation on the same [`Decoder`] was started.
+    ///
+    /// If this is the first decode operation, this method will return `true`. The return value of
+    /// this method can be used to determine whether any bind groups referencing the target
+    /// [`Texture`] need to be recreated.
+    #[inline]
+    pub fn texture_changed(&self) -> bool {
+        self.texture_changed
+    }
 }
 
 /// A parsed JPEG image, containing all data needed for on-GPU decoding.
@@ -511,6 +593,14 @@ impl<'a> ImageData<'a> {
         let height_mcus = height_dus / max_vsample;
 
         let total_restart_intervals = height_mcus * width_mcus / ri;
+
+        if total_restart_intervals > Decoder::MAX_RESTART_INTERVALS {
+            bail!(
+                "number of restart intervals exceeds limit ({} > {})",
+                total_restart_intervals,
+                Decoder::MAX_RESTART_INTERVALS,
+            );
+        }
 
         let metadata = metadata::Metadata {
             restart_interval: ri,

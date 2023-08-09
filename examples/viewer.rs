@@ -93,8 +93,7 @@ fn main() -> anyhow::Result<()> {
         ..Default::default()
     }))
     .ok_or_else(|| anyhow::anyhow!("no compatible graphics adapter found"))?;
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&Gpu::device_descriptor(), None))?;
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default(), None))?;
     let (device, queue) = (Arc::new(device), Arc::new(queue));
 
     let mut conf = surface
@@ -137,7 +136,7 @@ fn main() -> anyhow::Result<()> {
                     process::exit(1);
                 }
             };
-            decoder.start_decode(&image);
+            let decode_op = decoder.decode_blocking(&image);
 
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             let copy_size = wgpu::Extent3d {
@@ -153,7 +152,7 @@ fn main() -> anyhow::Result<()> {
                     rows_per_image: None,
                 },
             };
-            enc.copy_texture_to_buffer(decoder.output().as_image_copy(), icb, copy_size);
+            enc.copy_texture_to_buffer(decode_op.texture().as_image_copy(), icb, copy_size);
             enc.copy_buffer_to_texture(icb, st.texture.as_image_copy(), copy_size);
             queue.submit([enc.finish()]);
 

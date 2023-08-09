@@ -1,3 +1,8 @@
+//! Bit stream reader test implementation.
+//!
+//! This module served to prototype a CPU implementation of a bitstream reader, for later porting
+//! to WGSL. It is preserved for reference only and is not used by the rest of the crate.
+
 #![allow(dead_code)]
 
 use crate::huffman::TableData;

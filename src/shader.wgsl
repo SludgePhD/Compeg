@@ -27,8 +27,8 @@ struct Metadata {
     width_mcus: u32,
     max_hsample: u32,
     max_vsample: u32,
-    // Array index lookup table to undo the zigzag encoding. This should really just be a constant
-    // array defined in the shader, but naga doesn't support those.
+    // Array index lookup table to undo the zigzag encoding.
+    // FIXME: This should really just be a constant array defined in the shader, but naga doesn't support those
     unzigzag: array<u32, 64>,
 }
 
@@ -113,8 +113,8 @@ fn peek(n: u32) -> u32 {
 // Precondition: At least 16 bits left in the reader.
 // Postcondition: Consumes up to 16 bits from the bit stream without refilling it.
 fn huffdecode(table: u32) -> u32 {
-    // The level-1 LUT is index by the most significant 8 bits. But we store 2 16-bit entries in the
-    // same word, so we have to fetch 2 entries at once.
+    // The level-1 LUT is indexed by the most significant 8 bits. But we store 2 16-bit entries in
+    // the same word, so we have to fetch 2 entries at once.
     let code = bitstate.cur >> 16u;
 
     let l1idx = code >> 8u;

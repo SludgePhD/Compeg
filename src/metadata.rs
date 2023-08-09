@@ -25,7 +25,6 @@ pub struct Metadata {
     // Ri – number of MCUs per restart interval
     pub restart_interval: u32,
     pub components: [Component; 3],
-    /// Written by shader.
     pub total_restart_intervals: u32,
     /// Image width in MCUs.
     pub width_mcus: u32,

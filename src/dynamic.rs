@@ -7,10 +7,14 @@ use wgpu::*;
 
 use crate::Gpu;
 
+/// A GPU buffer that is automatically enlarged when too small.
 pub struct DynamicBuffer {
     gpu: Arc<Gpu>,
     name: Cow<'static, str>,
     buffer: Buffer,
+    /// The generation counter starts at 0 and is incremented every time the underlying [`Buffer`]
+    /// is reallocated to make more space. It is used for change detection, in order to recreate
+    /// the [`BindGroup`] this buffer is used in.
     generation: u64,
 }
 
@@ -70,6 +74,8 @@ impl DynamicBuffer {
 }
 
 /// A buffer for downloading data from a [`DynamicBuffer`].
+///
+/// This is useful for debugging what happens on the GPU, but is otherwise unused.
 #[allow(dead_code)]
 pub struct DownloadBuffer {
     gpu: Arc<Gpu>,
@@ -151,11 +157,15 @@ impl<'a> Drop for Mapped<'a> {
     }
 }
 
+/// An on-GPU [`Texture`] that is automatically reallocated when its dimensions are too small.
 pub struct DynamicTexture {
     gpu: Arc<Gpu>,
     name: Cow<'static, str>,
     texture: Texture,
     view: TextureView,
+    /// The generation counter starts at 0 and is incremented every time the underlying [`Texture`]
+    /// is reallocated to make more space. It is used for change detection, in order to recreate
+    /// the [`BindGroup`] this texture is used in.
     generation: u64,
 }
 
@@ -198,7 +208,7 @@ impl DynamicTexture {
     }
 
     /// Ensures that the texture can store at least `width x height` texels.
-    pub fn reserve(&mut self, width: u32, height: u32) {
+    pub fn reserve(&mut self, width: u32, height: u32) -> bool {
         if width > self.texture.size().width || height > self.texture.size().height {
             log::debug!(
                 "recreating DynamicTexture '{}' at {}x{}",
@@ -225,6 +235,9 @@ impl DynamicTexture {
                 ..Default::default()
             });
             self.generation += 1;
+            true
+        } else {
+            false
         }
     }
 
@@ -237,11 +250,13 @@ impl DynamicTexture {
     }
 }
 
+/// A [`BindGroup`] that is automatically recreated when its contents change.
 pub struct DynamicBindGroup {
     gpu: Arc<Gpu>,
     layout: Arc<BindGroupLayout>,
     name: Cow<'static, str>,
     bind_group: Option<BindGroup>,
+    /// Stores generation counters for the resources used in the `bind_group` above.
     generations: Vec<u64>,
 }
 
@@ -260,6 +275,9 @@ impl DynamicBindGroup {
         }
     }
 
+    /// Returns the cached [`BindGroup`], or recreates it if necessary.
+    ///
+    /// The `resources` array passed to this method must refer to the same resources on every call.
     pub fn bind_group(&mut self, resources: &[DynamicBindingResource<'_>]) -> &BindGroup {
         self.generations.resize(resources.len(), !0);
         let any_changed = self
@@ -296,9 +314,14 @@ impl DynamicBindGroup {
     }
 }
 
+/// A bind group resource that can be used in a [`DynamicBindGroup`].
 pub enum DynamicBindingResource<'a> {
     Buffer(&'a DynamicBuffer),
     Texture(&'a DynamicTexture),
+    /// A static [`BindingResource`] that does *not* support dynamic reallocation.
+    ///
+    /// If this is used, the underlying resource *must* be the same for every call to
+    /// [`DynamicBindGroup::bind_group`].
     Static(BindingResource<'a>),
 }
 
