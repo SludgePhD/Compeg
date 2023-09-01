@@ -17,7 +17,6 @@ mod file;
 mod huffman;
 mod metadata;
 mod scan;
-mod sort;
 
 use std::{
     borrow::Cow,
