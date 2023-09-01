@@ -219,28 +219,6 @@ fn ycbcr2rgb(y: u32, cb: u32, cr: u32) -> vec3<u32> {
     return vec3<u32>(clamp(vec3(r, g, b), vec3(0), vec3(255)));
 }
 
-// Happy little accidents while writing the above function:
-fn ycbcr2glitchart(y: u32, cb: u32, cr: u32) -> vec3<u32> {
-    let ycbcr = vec3<f32>(vec3(y, cb, cr)) - vec3(0.0, 128.0, 128.0);
-    let m = mat3x3(
-        1.0, 0.0, 45.0,
-        1.0, -11.0, 23.0,
-        1.0, 113.0, 0.0,
-    );
-    let rgb = vec3<i32>(ycbcr * m);
-    return vec3<u32>(vec3(rgb.r >> 5u, rgb.g >> 5u, rgb.b >> 6u));
-}
-
-fn ycbcr2glitchart2(y: u32, cb: u32, cr: u32) -> vec3<u32> {
-    let y = i32(y);
-    let cb = i32(cb) - 128;
-    let cr = i32(cr) - 128;
-    let r = y + (45 * cr) >> 5u;
-    let g = y - (11 * cb + 23 * cr) >> 5u;
-    let b = y + (113 * cb) >> 6u;
-    return vec3<u32>(vec3(r, g, b));
-}
-
 // JPEG decode entry point.
 // Each invocation of this shader will decode one restart interval of MCUs.
 @compute
@@ -368,35 +346,18 @@ fn unzigzag(pos: u32) -> u32 {
 // debugging. The resulting image will consist entirely of flat 8x8 blocks, but they should be of
 // roughly the right color/brightness compared to the correct result.
 //
-// 1 = idct_zune
-// -------------
-// This IDCT was ported straight from zune-jpeg's scalar integer IDCT. The original code can be
-// found here:
-// https://github.com/etemesi254/zune-image/blob/a59c6753d7687dab0ef00389a7b54b7db8970d94/zune-jpeg/src/idct/scalar.rs
-// For unknown reasons, the ported implementation does not work. It also seems suboptimal to just
-// naively port an IDCT implementation meant to enable autovectorization, since that doesn't help
-// much on GPUs.
-//
-// 2 = idct_float
+// 1 = idct_float
 // --------------
 // A naive port of the IDCT routine described by the JPEG specification. Surprisingly (or rather,
 // unsurprisingly?) this not only appears to work, but doesn't even perform as poorly as it looks!
+const IDCT_IMPL: u32 = 1u;
 
-// 0 = DC only
-// 1 = zune-jpeg integer DCT
-// 2 = float DCT
-const IDCT_IMPL: u32 = 2u;
-
-// This function is ported from zune-jpeg
 fn idct(in_vector: array<i32, 64>) -> array<i32, 64> {
     switch IDCT_IMPL {
         case 0u: {
             return idct_dc_only(in_vector);
         }
         case 1u: {
-            return idct_zune(in_vector);
-        }
-        case 2u: {
             return idct_float(in_vector);
         }
         default: {
@@ -442,158 +403,4 @@ fn idct_float(in_vector: array<i32, 64>) -> array<i32, 64> {
     }
 
     return out_vector;
-}
-
-fn idct_zune(in_vector: array<i32, 64>) -> array<i32, 64> {
-    // FIXME: `const`ify
-    let SCALE_BITS = 512 + 65536 + (128 << 17u);
-
-    var in_vector = in_vector;
-    var out_vector = array<i32, 64>();
-
-    for (var ptr_ = 0u; ptr_ < 8u; ptr_++) {
-        var p1: i32;
-        var p2: i32;
-        var p3: i32;
-        var p4: i32;
-        var p5: i32;
-        var t0: i32;
-        var t1: i32;
-        var t2: i32;
-        var t3: i32;
-
-        p2 = in_vector[ptr_ + 16u];
-        p3 = in_vector[ptr_ + 48u];
-
-        p1 = (p2 + p3) * 2217;
-
-        t2 = p1 + p3 * -7567;
-        t3 = p1 + p2 *  3135;
-
-        p2 = in_vector[ptr_];
-        p3 = in_vector[ptr_ + 32u];
-        t0 = fsh(p2 + p3);
-        t1 = fsh(p2 - p3);
-
-        let x0 = t0 + t3 + 512;
-        let x3 = t0 - t3 + 512;
-        let x1 = t1 + t2 + 512;
-        let x2 = t1 - t2 + 512;
-
-        // odd part
-        t0 = in_vector[ptr_ + 56u];
-        t1 = in_vector[ptr_ + 40u];
-        t2 = in_vector[ptr_ + 24u];
-        t3 = in_vector[ptr_ + 8u];
-
-        p3 = t0 + t2;
-        p4 = t1 + t3;
-        p1 = t0 + t3;
-        p2 = t1 + t2;
-        p5 = (p3 + p4) * 4816;
-
-        t0 *= 1223;
-        t1 *= 8410;
-        t2 *= 12586;
-        t3 *= 6149;
-
-        p1 = p5 + p1 * -3685;
-        p2 = p5 + p2 * -10497;
-        p3 = p3 * -8034;
-        p4 = p4 * -1597;
-
-        t3 += p1 + p4;
-        t2 += p2 + p3;
-        t1 += p2 + p4;
-        t0 += p1 + p3;
-
-        in_vector[ptr_] = (x0 + t3) >> 10u;
-        in_vector[ptr_ + 8u] = (x1 + t2) >> 10u;
-        in_vector[ptr_ + 16u] = (x2 + t1) >> 10u;
-        in_vector[ptr_ + 24u] = (x3 + t0) >> 10u;
-        in_vector[ptr_ + 32u] = (x3 - t0) >> 10u;
-        in_vector[ptr_ + 40u] = (x2 - t1) >> 10u;
-        in_vector[ptr_ + 48u] = (x1 - t2) >> 10u;
-        in_vector[ptr_ + 56u] = (x0 - t3) >> 10u;
-    }
-
-    var i = 0u;
-    for (var ptr_ = 0u; ptr_ < 8u; ptr_++) {
-        var p1: i32;
-        var p2: i32;
-        var p3: i32;
-        var p4: i32;
-        var p5: i32;
-        var t0: i32;
-        var t1: i32;
-        var t2: i32;
-        var t3: i32;
-
-        p2 = in_vector[ptr_ + 2u];
-        p3 = in_vector[ptr_ + 6u];
-
-        p1 = (p2 + p3) * 2217;
-        t2 = p1 + p3 * -7567;
-        t3 = p1 + p3 *  3135;
-
-        p2 = in_vector[ptr_];
-        p3 = in_vector[ptr_ + 4u];
-
-        t0 = fsh(p2 + p3);
-        t1 = fsh(p2 - p3);
-
-        let x0 = t0 + t3 + SCALE_BITS;
-        let x3 = t0 - t3 + SCALE_BITS;
-        let x1 = t1 + t2 + SCALE_BITS;
-        let x2 = t1 - t2 + SCALE_BITS;
-        // odd part
-        t0 = in_vector[i + 7u];
-        t1 = in_vector[i + 5u];
-        t2 = in_vector[i + 3u];
-        t3 = in_vector[i + 1u];
-
-        p3 = t0 + t2;
-        p4 = t1 + t3;
-        p1 = t0 + t3;
-        p2 = t1 + t2;
-        p5 = (p3 + p4) * f2f(1.175875602);
-
-        t0 *= 1223;
-        t1 *= 8410;
-        t2 *= 12586;
-        t3 *= 6149;
-
-        p1 = p5 + p1 * -3685;
-        p2 = p5 + p2 * -10497;
-        p3 = p3 * -8034;
-        p4 = p4 * -1597;
-
-        t3 += p1 + p4;
-        t2 += p2 + p3;
-        t1 += p2 + p4;
-        t0 += p1 + p3;
-
-        out_vector[i + 0u] = clamp((x0 + t3) >> 17u, 0, 255);
-        out_vector[i + 1u] = clamp((x1 + t2) >> 17u, 0, 255);
-        out_vector[i + 2u] = clamp((x2 + t1) >> 17u, 0, 255);
-        out_vector[i + 3u] = clamp((x3 + t0) >> 17u, 0, 255);
-        out_vector[i + 4u] = clamp((x3 - t0) >> 17u, 0, 255);
-        out_vector[i + 5u] = clamp((x2 - t1) >> 17u, 0, 255);
-        out_vector[i + 6u] = clamp((x1 - t2) >> 17u, 0, 255);
-        out_vector[i + 7u] = clamp((x0 - t3) >> 17u, 0, 255);
-
-        i += 8u;
-    }
-
-    return out_vector;
-}
-
-// Multiply a number by 4096
-fn f2f(x: f32) -> i32 {
-    return i32(x * 4096.0 + 0.5);
-}
-
-// Multiply a number by 4096
-fn fsh(x: i32) -> i32 {
-    return x << 12u;
 }
