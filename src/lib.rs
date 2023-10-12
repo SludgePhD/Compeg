@@ -580,7 +580,13 @@ impl<'a> ImageData<'a> {
             }
         }
 
-        let (Some((width, height)), Some(components), Some(ri), Some((scan_data_offset, scan_data_len))) = (size, components, ri, scan_data) else {
+        #[rustfmt::skip]
+        let (
+            Some((width, height)),
+            Some(components),
+            Some(ri),
+            Some((scan_data_offset, scan_data_len)),
+        ) = (size, components, ri, scan_data) else {
             bail!("missing DRI/SOS/SOI marker");
         };
 
