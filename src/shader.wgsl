@@ -153,9 +153,8 @@ struct DataUnitBuf {
 var<private> mcu_buffer: array<DataUnitBuf, 4>;
 // 64 * 4 bytes = 256 bytes per invocation
 
-fn mcu_buffer_store_data_unit(du_index: u32, values: array<i32, 64>) {
-    var values = values;
-
+fn mcu_buffer_store_data_unit(du_index: u32, values_: array<i32, 64>) {
+    var values = values_;
     for (var y = 0u; y < 8u; y++) {
         let row = vec2(
             u32(values[y * 8u + 0u]) << 0u |
@@ -206,13 +205,13 @@ fn mcu_buffer_flush(mcu_idx: u32) {
     }
 }
 
-fn ycbcr2rgb(y: u32, cb: u32, cr: u32) -> vec3<u32> {
+fn ycbcr2rgb(y_: u32, cb_: u32, cr_: u32) -> vec3<u32> {
     // JFIF specifies a default YCbCr color space according to the BT.601 standard. "Limited range"
     // is not used, the full 256 values are available for luminance information.
 
-    let y = i32(y);
-    let cb = i32(cb) - 128;
-    let cr = i32(cr) - 128;
+    let y = i32(y_);
+    let cb = i32(cb_) - 128;
+    let cr = i32(cr_) - 128;
     let r = y + ((45 * cr) >> 5u);
     let g = y - ((11 * cb + 23 * cr) >> 5u);
     let b = y + ((113 * cb) >> 6u);
@@ -377,8 +376,8 @@ fn idct_dc_only(in_vector: array<i32, 64>) -> array<i32, 64> {
 
 const PI = 3.141592;
 
-fn idct_float(in_vector: array<i32, 64>) -> array<i32, 64> {
-    var in_vector = in_vector;
+fn idct_float(in_vector_: array<i32, 64>) -> array<i32, 64> {
+    var in_vector = in_vector_;
     var out_vector = array<i32, 64>();
 
     for (var y = 0u; y < 8u; y++) {

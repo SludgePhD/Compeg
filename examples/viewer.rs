@@ -13,7 +13,7 @@ use wgpu::InstanceDescriptor;
 use winit::{
     dpi::PhysicalSize,
     event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
+    event_loop::EventLoop,
     window::WindowBuilder,
 };
 
@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
         .parse_default_env()
         .init();
 
-    let ev = EventLoop::new();
+    let ev = EventLoop::new()?;
     let proxy = ev.create_proxy();
 
     let (width, height);
@@ -113,56 +113,58 @@ fn main() -> anyhow::Result<()> {
         mapped_at_creation: false,
     });
 
-    ev.run(move |event, _target, flow| match event {
-        Event::RedrawRequested(_) => {
-            let st = loop {
-                match surface.get_current_texture() {
-                    Ok(tex) => break tex,
-                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        surface.configure(&device, &conf);
+    ev.run(move |event, target| match event {
+        Event::UserEvent(()) => win.request_redraw(),
+        Event::WindowEvent { event, .. } => match event {
+            WindowEvent::RedrawRequested => {
+                let st = loop {
+                    match surface.get_current_texture() {
+                        Ok(tex) => break tex,
+                        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                            surface.configure(&device, &conf);
+                        }
+                        Err(e) => {
+                            eprintln!("fatal error: {e}");
+                            process::exit(1);
+                        }
                     }
+                };
+
+                let jpeg = frame.jpeg.lock().unwrap();
+                let image = match ImageData::new(&*jpeg) {
+                    Ok(image) => image,
                     Err(e) => {
-                        eprintln!("fatal error: {e}");
+                        eprintln!("failed to parse JPEG image: {e}");
                         process::exit(1);
                     }
-                }
-            };
+                };
+                let decode_op = decoder.decode_blocking(&image);
 
-            let jpeg = frame.jpeg.lock().unwrap();
-            let image = match ImageData::new(&*jpeg) {
-                Ok(image) => image,
-                Err(e) => {
-                    eprintln!("failed to parse JPEG image: {e}");
-                    process::exit(1);
-                }
-            };
-            let decode_op = decoder.decode_blocking(&image);
+                let mut enc =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                let copy_size = wgpu::Extent3d {
+                    width: image.width(),
+                    height: image.height(),
+                    depth_or_array_layers: 1,
+                };
+                let icb = wgpu::ImageCopyBuffer {
+                    buffer: &scratch,
+                    layout: wgpu::ImageDataLayout {
+                        offset: 0,
+                        bytes_per_row: Some(stride),
+                        rows_per_image: None,
+                    },
+                };
+                enc.copy_texture_to_buffer(decode_op.texture().as_image_copy(), icb, copy_size);
+                enc.copy_buffer_to_texture(icb, st.texture.as_image_copy(), copy_size);
+                queue.submit([enc.finish()]);
 
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            let copy_size = wgpu::Extent3d {
-                width: image.width(),
-                height: image.height(),
-                depth_or_array_layers: 1,
-            };
-            let icb = wgpu::ImageCopyBuffer {
-                buffer: &scratch,
-                layout: wgpu::ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: Some(stride),
-                    rows_per_image: None,
-                },
-            };
-            enc.copy_texture_to_buffer(decode_op.texture().as_image_copy(), icb, copy_size);
-            enc.copy_buffer_to_texture(icb, st.texture.as_image_copy(), copy_size);
-            queue.submit([enc.finish()]);
-
-            st.present();
-        }
-        Event::UserEvent(()) => win.request_redraw(),
-        Event::WindowEvent {
-            event: WindowEvent::CloseRequested,
-            ..
-        } => *flow = ControlFlow::Exit,
+                st.present();
+            }
+            WindowEvent::CloseRequested => target.exit(),
+            _ => {}
+        },
         _ => {}
-    });
+    })?;
+    Ok(())
 }
