@@ -294,7 +294,7 @@ fn jpeg_decode(
                         decoded[i] = coeff * dequant(qtable, i);
                     }
 
-                    // Perform iDCT using the `decoded` coefficients.
+                    // Perform iDCT using the decoded and dequantized coefficients.
                     decoded = idct(decoded);
 
                     // Write the data unit to the MCU buffer, for later processing.
@@ -344,25 +344,38 @@ fn unzigzag(pos: u32) -> u32 {
 // We have several IDCT implementations, primarily just for development and debugging.
 // They are chosen statically with the `IDCT_IMPL` parameter.
 
-// 0 = idct_dc_only
-// ----------------
+// IDCT_DC_ONLY
+// ------------
 // This IDCT ignores the AC values and only decodes the DC coefficient. This is mostly meant for
 // debugging. The resulting image will consist entirely of flat 8x8 blocks, but they should be of
 // roughly the right color/brightness compared to the correct result.
 //
-// 1 = idct_float
-// --------------
-// A naive port of the IDCT routine described by the JPEG specification. Surprisingly (or rather,
-// unsurprisingly?) this not only appears to work, but doesn't even perform as poorly as it looks!
-const IDCT_IMPL: u32 = 1u;
+// IDCT_FLOAT_NAIVE
+// ----------------
+// A naive port of the IDCT routine described by the JPEG specification. This produces correct
+// results, but is very computationally expensive.
+//
+// IDCT_FLOAT_FAST
+// ---------------
+// A port of the libjpeg-turbo IDCT implementation in `jidctflt.c`. Much faster than the naive IDCT,
+// and still produces correct-looking output.
+// <https://github.com/libjpeg-turbo/libjpeg-turbo/blob/ec32420f6b5dfa4e86883d42b209e8371e55aeb5/jidctflt.c>
+const IDCT_IMPL_CHOICE: u32 = IDCT_FLOAT_FAST;
+
+const IDCT_DC_ONLY: u32 = 0u;
+const IDCT_FLOAT_NAIVE: u32 = 1u;
+const IDCT_FLOAT_FAST: u32 = 2u;
 
 fn idct(in_vector: array<i32, 64>) -> array<i32, 64> {
-    switch IDCT_IMPL {
-        case 0u: {
+    switch IDCT_IMPL_CHOICE {
+        case IDCT_DC_ONLY: {
             return idct_dc_only(in_vector);
         }
-        case 1u: {
-            return idct_float(in_vector);
+        case IDCT_FLOAT_NAIVE: {
+            return idct_float_naive(in_vector);
+        }
+        case IDCT_FLOAT_FAST: {
+            return idct_float_fast(in_vector);
         }
         default: {
             return array<i32, 64>();
@@ -381,7 +394,7 @@ fn idct_dc_only(in_vector: array<i32, 64>) -> array<i32, 64> {
 
 const PI = 3.141592;
 
-fn idct_float(in_vector_: array<i32, 64>) -> array<i32, 64> {
+fn idct_float_naive(in_vector_: array<i32, 64>) -> array<i32, 64> {
     var in_vector = in_vector_;
     var out_vector = array<i32, 64>();
 
@@ -404,6 +417,124 @@ fn idct_float(in_vector_: array<i32, 64>) -> array<i32, 64> {
             val = val / 4.0 + 128.0;
             out_vector[y * 8u + x] = clamp(i32(val), 0, 255);
         }
+    }
+
+    return out_vector;
+}
+
+const DCT_SIZE = 8u;
+fn idct_float_fast(in_vector_: array<i32, 64>) -> array<i32, 64> {
+    var in_vector = in_vector_;
+    var out_vector = array<i32, 64>();
+
+    var ws = array<f32, 64>();
+
+    var tmp0: f32;
+    var tmp1: f32;
+    var tmp2: f32;
+    var tmp3: f32;
+    var tmp4: f32;
+    var tmp5: f32;
+    var tmp6: f32;
+    var tmp7: f32;
+    var tmp10: f32;
+    var tmp11: f32;
+    var tmp12: f32;
+    var tmp13: f32;
+
+    for (var icol = 0u; icol < DCT_SIZE; icol++) {
+        /* even part */
+
+        tmp0 = f32(in_vector[DCT_SIZE * 0u + icol]) * 0.125;
+        tmp1 = f32(in_vector[DCT_SIZE * 2u + icol]) * 0.125;
+        tmp2 = f32(in_vector[DCT_SIZE * 4u + icol]) * 0.125;
+        tmp3 = f32(in_vector[DCT_SIZE * 6u + icol]) * 0.125;
+
+        tmp10 = tmp0 + tmp2;
+        tmp11 = tmp0 - tmp2;
+
+        tmp13 = tmp1 + tmp3;
+        tmp12 = (tmp1 - tmp3) * 1.414213562 - tmp13;
+
+        tmp0 = tmp10 + tmp13;
+        tmp3 = tmp10 - tmp13;
+        tmp1 = tmp11 + tmp12;
+        tmp2 = tmp11 - tmp12;
+
+        /* odd part */
+
+        tmp4 = f32(in_vector[DCT_SIZE * 1u + icol]) * 0.125;
+        tmp5 = f32(in_vector[DCT_SIZE * 3u + icol]) * 0.125;
+        tmp6 = f32(in_vector[DCT_SIZE * 5u + icol]) * 0.125;
+        tmp7 = f32(in_vector[DCT_SIZE * 7u + icol]) * 0.125;
+
+        let z13 = tmp6 + tmp5;
+        let z10 = tmp6 - tmp5;
+        let z11 = tmp4 + tmp7;
+        let z12 = tmp4 - tmp7;
+
+        tmp7 = z11 + z13;
+        tmp11 = (z11 - z13) * 1.414213562;
+
+        let z5 = (z10 + z12) * 1.847759065;
+        tmp10 = z5 - z12 * 1.082392200;
+        tmp12 = z5 - z10 * 2.613125930;
+
+        tmp6 = tmp12 - tmp7;
+        tmp5 = tmp11 - tmp6;
+        tmp4 = tmp10 - tmp5;
+
+        ws[DCT_SIZE * 0u + icol] = tmp0 + tmp7;
+        ws[DCT_SIZE * 7u + icol] = tmp0 - tmp7;
+        ws[DCT_SIZE * 1u + icol] = tmp1 + tmp6;
+        ws[DCT_SIZE * 6u + icol] = tmp1 - tmp6;
+        ws[DCT_SIZE * 2u + icol] = tmp2 + tmp5;
+        ws[DCT_SIZE * 5u + icol] = tmp2 - tmp5;
+        ws[DCT_SIZE * 3u + icol] = tmp3 + tmp4;
+        ws[DCT_SIZE * 4u + icol] = tmp3 - tmp4;
+    }
+
+    for (var row = 0u; row < DCT_SIZE; row++) {
+        /* even part */
+
+        var z5 = ws[row * DCT_SIZE + 0u] + 128.5;
+        tmp10 = z5 + ws[row * DCT_SIZE + 4u];
+        tmp11 = z5 - ws[row * DCT_SIZE + 4u];
+
+        tmp13 = ws[row * DCT_SIZE + 2u] + ws[row * DCT_SIZE + 6u];
+        tmp12 = (ws[row * DCT_SIZE + 2u] - ws[row * DCT_SIZE + 6u]) * 1.414213562 - tmp13;
+
+        tmp0 = tmp10 + tmp13;
+        tmp3 = tmp10 - tmp13;
+        tmp1 = tmp11 + tmp12;
+        tmp2 = tmp11 - tmp12;
+
+        /* odd part */
+
+        let z13 = ws[row * DCT_SIZE + 5u] + ws[row * DCT_SIZE + 3u];
+        let z10 = ws[row * DCT_SIZE + 5u] - ws[row * DCT_SIZE + 3u];
+        let z11 = ws[row * DCT_SIZE + 1u] + ws[row * DCT_SIZE + 7u];
+        let z12 = ws[row * DCT_SIZE + 1u] - ws[row * DCT_SIZE + 7u];
+
+        tmp7 = z11 + z13;
+        tmp11 = (z11 - z13) * 1.414213562;
+
+        z5 = (z10 + z12) * 1.847759065;
+        tmp10 = z5 - z12 * 1.082392200;
+        tmp12 = z5 - z10 * 2.613125930;
+
+        tmp6 = tmp12 - tmp7;
+        tmp5 = tmp11 - tmp6;
+        tmp4 = tmp10 - tmp5;
+
+        out_vector[row * DCT_SIZE + 0u] = clamp(i32(tmp0 + tmp7), 0, 255);
+        out_vector[row * DCT_SIZE + 7u] = clamp(i32(tmp0 - tmp7), 0, 255);
+        out_vector[row * DCT_SIZE + 1u] = clamp(i32(tmp1 + tmp6), 0, 255);
+        out_vector[row * DCT_SIZE + 6u] = clamp(i32(tmp1 - tmp6), 0, 255);
+        out_vector[row * DCT_SIZE + 2u] = clamp(i32(tmp2 + tmp5), 0, 255);
+        out_vector[row * DCT_SIZE + 5u] = clamp(i32(tmp2 - tmp5), 0, 255);
+        out_vector[row * DCT_SIZE + 3u] = clamp(i32(tmp3 + tmp4), 0, 255);
+        out_vector[row * DCT_SIZE + 4u] = clamp(i32(tmp3 - tmp4), 0, 255);
     }
 
     return out_vector;
