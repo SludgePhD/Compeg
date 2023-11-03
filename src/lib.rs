@@ -35,7 +35,7 @@ use crate::{
     dynamic::{DynamicBuffer, DynamicTexture},
     file::SofMarker,
     huffman::{HuffmanTables, TableData},
-    metadata::{QTable, UNZIGZAG},
+    metadata::QTable,
 };
 
 /// **Not** part of the public API. Used for benchmarks only.
@@ -621,7 +621,6 @@ impl<'a> ImageData<'a> {
             width_mcus,
             max_hsample,
             max_vsample,
-            unzigzag: UNZIGZAG,
         };
 
         let huffman_tables = HuffmanTables::new(huffman_tables);
