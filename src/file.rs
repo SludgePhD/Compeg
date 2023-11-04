@@ -45,14 +45,6 @@ impl<'a> JpegParser<'a> {
         }
 
         if marker == 0xD9 {
-            // EOI marker
-            if !self.reader.remaining().is_empty() {
-                log::warn!(
-                    "ignoring {} trailing bytes after EOI",
-                    self.reader.remaining().len()
-                );
-            }
-
             return Ok(None);
         }
 
