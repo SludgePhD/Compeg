@@ -5,7 +5,7 @@
 #[cfg(test)]
 mod tests;
 
-use std::{fmt, marker::PhantomData, mem};
+use std::{cmp, fmt, marker::PhantomData, mem};
 
 use bytemuck::{AnyBitPattern, Pod, Zeroable};
 
@@ -93,8 +93,9 @@ impl<'a> JpegParser<'a> {
                 length,
                 remaining,
             );
-            self.reader.position = expected_end;
+            reader.position = expected_end;
         }
+        self.reader.position = cmp::max(self.reader.position, reader.position);
 
         Ok(Some(Segment {
             marker,
@@ -231,7 +232,7 @@ impl<'a> JpegParser<'a> {
 
         // Silence the "X bytes remain after decoding" warning for APP segments, since they contain
         // arbitrary data we don't always know about.
-        reader.position = reader.buf.len() - 1;
+        reader.position = reader.buf.len();
 
         Ok(APP { n, kind })
     }
