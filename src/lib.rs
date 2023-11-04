@@ -72,6 +72,14 @@ impl Gpu {
             .await
             .map_err(|_| Error::from("no supported graphics device found"))?;
 
+        let info = adapter.get_info();
+        log::info!(
+            "opened {:?} adapter {} ({})",
+            info.backend,
+            info.name,
+            info.driver
+        );
+
         Self::from_wgpu(device.into(), queue.into())
     }
 

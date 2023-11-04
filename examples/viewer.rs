@@ -9,7 +9,7 @@ use std::{
 use anyhow::bail;
 use compeg::{Decoder, Gpu, ImageData};
 use linuxvideo::format::{PixFormat, PixelFormat};
-use wgpu::InstanceDescriptor;
+use wgpu::{Backends, InstanceDescriptor};
 use winit::{
     dpi::PhysicalSize,
     event::{Event, WindowEvent},
@@ -86,7 +86,12 @@ fn main() -> anyhow::Result<()> {
         .with_inner_size(PhysicalSize::new(width, height))
         .build(&ev)?;
 
-    let instance = wgpu::Instance::new(InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(InstanceDescriptor {
+        // The OpenGL backend panics spuriously, and segfaults when dropping the `Device`, so don't
+        // enable it.
+        backends: Backends::PRIMARY,
+        ..Default::default()
+    });
     let surface = unsafe { instance.create_surface(&win)? };
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         compatible_surface: Some(&surface),
