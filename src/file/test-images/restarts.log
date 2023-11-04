@@ -1,4 +1,4 @@
-0002 [FF E0] [4a, 46, 49, 46, 0, 1, 1, 1, 0, 48, 0, 48, 0, 0]
+0002 [FF E0] App(App { n: 0, kind: Some(Jfif(Jfif { major_version: 1, minor_version: 1, unit: DotsPerInch, xdensity: 72, ydensity: 72, xthumbnail: 0, ythumbnail: 0, thumbnail: [] })) })
 0014 [FF DB] Dqt(Dqt([QuantizationTable { Pq: 0, Tq: 0, Qk: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] }]))
 0059 [FF DB] Dqt(Dqt([QuantizationTable { Pq: 0, Tq: 1, Qk: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] }]))
 009E [FF C0] Sof(Sof { sof: SOF0, P: 8, Y: 33, X: 33, components: [FrameComponent { Ci: 1, Hi: 1, Vi: 1, Tqi: 0 }, FrameComponent { Ci: 2, Hi: 1, Vi: 1, Tqi: 1 }, FrameComponent { Ci: 3, Hi: 1, Vi: 1, Tqi: 1 }] })

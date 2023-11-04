@@ -1,4 +1,4 @@
-0002 [FF E0] [4a, 46, 49, 46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0]
+0002 [FF E0] App(App { n: 0, kind: Some(Jfif(Jfif { major_version: 1, minor_version: 1, unit: None, xdensity: 1, ydensity: 1, xthumbnail: 0, ythumbnail: 0, thumbnail: [] })) })
 0014 [FF DB] Dqt(Dqt([QuantizationTable { Pq: 0, Tq: 0, Qk: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] }]))
 0059 [FF C0] Sof(Sof { sof: SOF0, P: 8, Y: 16, X: 24, components: [FrameComponent { Ci: 1, Hi: 2, Vi: 2, Tqi: 0 }] })
 0066 [FF C4] Dht(Dht { tables: [HuffmanTable { Tc: 0, Th: 0, Li: [0, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [3, 7, 8, 6] }] })

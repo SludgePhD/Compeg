@@ -578,6 +578,7 @@ impl<'a> ImageData<'a> {
 
                     scan_data = Some((sos.data_offset(), sos.data().len()));
                 }
+                _ => {}
             }
         }
 

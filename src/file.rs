@@ -5,7 +5,7 @@
 #[cfg(test)]
 mod tests;
 
-use std::{fmt, mem};
+use std::{fmt, marker::PhantomData, mem};
 
 use bytemuck::{AnyBitPattern, Pod, Zeroable};
 
@@ -31,7 +31,9 @@ impl<'a> JpegParser<'a> {
     /// This will not return `SOI`/`EOI` markers, since those are handled internally by the parser,
     /// and are not the start of any marker segment.
     ///
-    /// Returns `Ok(None)` when the EOI marker is encountered, signaling the end of the image.
+    /// Returns `Ok(None)` when the EOI marker is encountered, signaling the end of the image. There
+    /// may be data stored after the EOI marker, which can be retrieved by calling
+    /// [`JpegParser::remaining`].
     pub fn next_segment(&mut self) -> Result<Option<Segment<'a>>> {
         while self.reader.read_u8()? != 0xff {}
 
@@ -61,14 +63,20 @@ impl<'a> JpegParser<'a> {
 
         let length = usize::from(self.reader.read_length()?);
         let expected_end = self.reader.position + length;
+        let mut reader = Reader {
+            buf: &self.reader.buf[..expected_end],
+            position: self.reader.position,
+        };
         let kind = match marker {
-            0xDB => Some(SegmentKind::Dqt(self.read_dqt(length)?)),
-            0xC4 => Some(SegmentKind::Dht(self.read_dht(length)?)),
+            0xDB => Some(SegmentKind::Dqt(self.read_dqt(&mut reader)?)),
+            0xC4 => Some(SegmentKind::Dht(self.read_dht(&mut reader)?)),
             0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF => {
-                Some(SegmentKind::Sof(self.read_sof(marker)?))
+                Some(SegmentKind::Sof(self.read_sof(marker, &mut reader)?))
             }
-            0xDA => Some(SegmentKind::Sos(self.read_sos()?)),
-            0xDD => Some(SegmentKind::Dri(self.read_dri()?)),
+            0xDA => Some(SegmentKind::Sos(self.read_sos(&mut reader)?)),
+            0xDD => Some(SegmentKind::Dri(self.read_dri(&mut reader)?)),
+            0xE0..=0xEF => Some(SegmentKind::App(self.read_app(marker, &mut reader)?)),
+            0xFE => Some(SegmentKind::Com(self.read_com(&mut reader)?)),
             _ => {
                 self.reader.position = expected_end;
                 None
@@ -77,8 +85,8 @@ impl<'a> JpegParser<'a> {
 
         // The segment specified a bigger length than what we ended up reading. Skip the remaining
         // bytes and log a warning.
-        if self.reader.position < expected_end {
-            let remaining = expected_end - self.reader.position;
+        if reader.position < expected_end {
+            let remaining = expected_end - reader.position;
             log::warn!(
                 "ff {:02x} segment specified a length of {} bytes, but {} remain after decoding",
                 marker,
@@ -97,54 +105,51 @@ impl<'a> JpegParser<'a> {
     }
 
     /// Returns the remaining (unparsed) bytes of the input data.
+    ///
+    /// After retrieving a segment via [`JpegParser::next_segment`], the result of this method is
+    /// the data immediately following that segment.
     pub fn remaining(&self) -> &'a [u8] {
         self.reader.remaining()
     }
 
-    fn read_dqt(&mut self, length: usize) -> Result<Dqt<'a>> {
+    fn read_dqt(&mut self, reader: &mut Reader<'a>) -> Result<Dqt<'a>> {
         // The size of the DQT segment tells us how many quantization tables there are.
         // FIXME: does not support 16-bit qtables
-        let count = length / mem::size_of::<QuantizationTable>();
-        if count * mem::size_of::<QuantizationTable>() != length {
+        let count = reader.remaining().len() / mem::size_of::<QuantizationTable>();
+        if count * mem::size_of::<QuantizationTable>() != reader.remaining().len() {
             log::warn!(
                 "DQT segment with {} bytes should have been a multiple of {} bytes",
-                length,
+                reader.remaining().len(),
                 mem::size_of::<QuantizationTable>()
             );
         }
-        let qts = self.reader.read_objs(count)?;
+        let qts = reader.read_objs(count)?;
         Ok(Dqt(qts))
     }
 
-    fn read_dht(&mut self, mut length: usize) -> Result<Dht<'a>> {
+    fn read_dht(&mut self, reader: &mut Reader<'a>) -> Result<Dht<'a>> {
         const MIN_DHT_LEN: usize = 18; // Tc+Th + 16 length bytes + at least one symbol-length assignment
 
         let mut tables = Vec::new();
 
-        while length >= MIN_DHT_LEN {
-            let pos = self.reader.position;
-
-            let header: &DhtHeader = self.reader.read_obj()?;
-            let values = self.reader.read_slice(header.num_values())?;
+        while reader.remaining().len() >= MIN_DHT_LEN {
+            let header: &DhtHeader = reader.read_obj()?;
+            let values = reader.read_slice(header.num_values())?;
             tables.push(HuffmanTable {
                 header,
                 Vij: values,
             });
-
-            length -= self.reader.position - pos;
         }
 
         Ok(Dht { tables })
     }
 
-    fn read_sof(&mut self, sof: u8) -> Result<Sof<'a>> {
-        let P = self.reader.read_u8()?;
-        let Y = self.reader.read_u16()?;
-        let X = self.reader.read_u16()?;
-        let num_components = self.reader.read_u8()?;
-        let components = self
-            .reader
-            .read_objs::<FrameComponent>(num_components.into())?;
+    fn read_sof(&mut self, sof: u8, reader: &mut Reader<'a>) -> Result<Sof<'a>> {
+        let P = reader.read_u8()?;
+        let Y = reader.read_u16()?;
+        let X = reader.read_u16()?;
+        let num_components = reader.read_u8()?;
+        let components = reader.read_objs::<FrameComponent>(num_components.into())?;
         Ok(Sof {
             sof: SofMarker(sof),
             P,
@@ -154,12 +159,14 @@ impl<'a> JpegParser<'a> {
         })
     }
 
-    fn read_sos(&mut self) -> Result<Sos<'a>> {
-        let num_components = self.reader.read_u8()?;
-        let components = self.reader.read_objs(num_components.into())?;
-        let Ss = self.reader.read_u8()?;
-        let Se = self.reader.read_u8()?;
-        let AhAl = self.reader.read_u8()?;
+    fn read_sos(&mut self, reader: &mut Reader<'a>) -> Result<Sos<'a>> {
+        let num_components = reader.read_u8()?;
+        let components = reader.read_objs(num_components.into())?;
+        let Ss = reader.read_u8()?;
+        let Se = reader.read_u8()?;
+        let AhAl = reader.read_u8()?;
+
+        self.reader.position = reader.position;
 
         // The scan itself can contain `RST` markers. We skip them and include them in the scan
         // data.
@@ -200,9 +207,68 @@ impl<'a> JpegParser<'a> {
         })
     }
 
-    fn read_dri(&mut self) -> Result<Dri> {
-        let Ri = self.reader.read_u16()?;
-        Ok(Dri { Ri })
+    fn read_dri(&mut self, reader: &mut Reader<'a>) -> Result<Dri<'a>> {
+        let Ri = reader.read_u16()?;
+        Ok(Dri {
+            Ri,
+            _p: PhantomData,
+        })
+    }
+
+    fn read_com(&mut self, reader: &mut Reader<'a>) -> Result<Com<'a>> {
+        Ok(Com {
+            com: reader.read_slice(reader.remaining().len())?,
+        })
+    }
+
+    fn read_app(&mut self, marker: u8, reader: &mut Reader<'a>) -> Result<App<'a>> {
+        let n = marker - 0xE0;
+
+        let kind = match n {
+            0 => self.read_jfif(reader)?.map(AppKind::Jfif),
+            _ => None,
+        };
+
+        // Silence the "X bytes remain after decoding" warning for APP segments, since they contain
+        // arbitrary data we don't always know about.
+        reader.position = reader.buf.len() - 1;
+
+        Ok(App { n, kind })
+    }
+
+    fn read_jfif(&mut self, reader: &mut Reader<'a>) -> Result<Option<Jfif<'a>>> {
+        const JFIF: &[u8] = b"JFIF\0";
+
+        if reader.read_slice(JFIF.len()).ok() != Some(JFIF) {
+            return Ok(None); // Not a JFIF header.
+        }
+
+        let major_version = reader.read_u8()?;
+        let minor_version = reader.read_u8()?;
+        let unit = match reader.read_u8()? {
+            0 => DensityUnit::None,
+            1 => DensityUnit::DotsPerInch,
+            2 => DensityUnit::DotsPerCm,
+            e => {
+                return Err(Error::from(format!(
+                    "JFIF header specifies invalid density unit {e}"
+                )))
+            }
+        };
+        let xdensity = reader.read_u16()?;
+        let ydensity = reader.read_u16()?;
+        let xthumbnail = reader.read_u8()?;
+        let ythumbnail = reader.read_u8()?;
+        Ok(Some(Jfif {
+            major_version,
+            minor_version,
+            unit,
+            xdensity,
+            ydensity,
+            xthumbnail,
+            ythumbnail,
+            thumbnail: reader.read_slice(usize::from(xthumbnail) * usize::from(ythumbnail) * 3)?,
+        }))
     }
 }
 
@@ -331,8 +397,116 @@ impl<'a> Segment<'a> {
         self.raw_bytes
     }
 
+    #[inline]
     pub fn as_segment_kind(&self) -> Option<&SegmentKind<'a>> {
         self.kind.as_ref()
+    }
+}
+
+/// An application-specific segment (`APPn`).
+#[derive(Debug)]
+pub struct App<'a> {
+    n: u8,
+    kind: Option<AppKind<'a>>,
+}
+
+impl<'a> App<'a> {
+    /// Returns the type of APP marker (the `n` in `APPn`).
+    ///
+    /// This is an integer derived from the marker in the beginning of the APP segment. It is always
+    /// in range `0..=15`.
+    ///
+    /// This ID can be used to partially identify the type of data stored in the APP segment. For
+    /// example, the JFIF header always uses APP0, so this method would return 0 for them. However,
+    /// APP0 can also be used for other purposes, so the JFIF header contains additional identifying
+    /// information (a magic number/string).
+    #[inline]
+    pub fn n(&self) -> u8 {
+        self.n
+    }
+
+    #[inline]
+    pub fn as_app_kind(&self) -> Option<&AppKind<'a>> {
+        self.kind.as_ref()
+    }
+}
+
+/// Enumeration of the known `APPn` segments understood by this parser.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum AppKind<'a> {
+    Jfif(Jfif<'a>),
+}
+
+#[derive(Debug)]
+pub struct Jfif<'a> {
+    major_version: u8,
+    minor_version: u8,
+    unit: DensityUnit,
+    xdensity: u16,
+    ydensity: u16,
+    xthumbnail: u8,
+    ythumbnail: u8,
+    thumbnail: &'a [u8],
+}
+
+impl<'a> Jfif<'a> {
+    #[inline]
+    pub fn major_version(&self) -> u8 {
+        self.major_version
+    }
+
+    #[inline]
+    pub fn minor_version(&self) -> u8 {
+        self.minor_version
+    }
+
+    #[inline]
+    pub fn unit(&self) -> DensityUnit {
+        self.unit
+    }
+
+    #[inline]
+    pub fn density_x(&self) -> u16 {
+        self.xdensity
+    }
+
+    #[inline]
+    pub fn density_y(&self) -> u16 {
+        self.ydensity
+    }
+
+    #[inline]
+    pub fn thumbnail_width(&self) -> u8 {
+        self.xthumbnail
+    }
+
+    #[inline]
+    pub fn thumbnail_height(&self) -> u8 {
+        self.ythumbnail
+    }
+
+    #[inline]
+    pub fn thumbnail_data(&self) -> &[u8] {
+        self.thumbnail
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DensityUnit {
+    None,
+    DotsPerInch,
+    DotsPerCm,
+}
+
+pub struct Com<'a> {
+    com: &'a [u8],
+}
+
+impl<'a> fmt::Debug for Com<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Com(\"{}\")", self.com.escape_ascii())
     }
 }
 
@@ -342,9 +516,11 @@ impl<'a> Segment<'a> {
 pub enum SegmentKind<'a> {
     Dqt(Dqt<'a>),
     Dht(Dht<'a>),
-    Dri(Dri),
+    Dri(Dri<'a>),
     Sof(Sof<'a>),
     Sos(Sos<'a>),
+    App(App<'a>),
+    Com(Com<'a>),
 }
 
 #[derive(Copy, Clone, AnyBitPattern)]
@@ -476,16 +652,23 @@ impl<'a> Dht<'a> {
 /// process. They enable parallelization of the decoding step as well. Additionally, they make the
 /// image more robust against data corruption, by preventing corruption from affecting more than the
 /// restart interval it occurs in.
-#[derive(Debug, Clone, Copy, AnyBitPattern)]
-pub struct Dri {
+#[derive(Clone, Copy)]
+pub struct Dri<'a> {
     Ri: u16,
+    _p: PhantomData<&'a ()>,
 }
 
-impl Dri {
+impl<'a> Dri<'a> {
     /// Returns the number of MCUs contained in each restart interval.
     #[inline]
     pub fn Ri(&self) -> u16 {
         self.Ri
+    }
+}
+
+impl<'a> fmt::Debug for Dri<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Dri").field("Ri", &self.Ri).finish()
     }
 }
 
@@ -540,6 +723,16 @@ impl fmt::Debug for SofMarker {
             Self::SOF0 => f.write_str("SOF0"),
             Self::SOF1 => f.write_str("SOF1"),
             Self::SOF2 => f.write_str("SOF2"),
+            Self::SOF3 => f.write_str("SOF3"),
+            Self::SOF5 => f.write_str("SOF5"),
+            Self::SOF6 => f.write_str("SOF6"),
+            Self::SOF7 => f.write_str("SOF7"),
+            Self::SOF9 => f.write_str("SOF9"),
+            Self::SOF10 => f.write_str("SOF10"),
+            Self::SOF11 => f.write_str("SOF11"),
+            Self::SOF13 => f.write_str("SOF13"),
+            Self::SOF14 => f.write_str("SOF14"),
+            Self::SOF15 => f.write_str("SOF15"),
             _ => f
                 .debug_tuple("SofMarker")
                 .field(&format_args!("{:02x}", self.0))
@@ -548,7 +741,6 @@ impl fmt::Debug for SofMarker {
     }
 }
 
-#[allow(dead_code)]
 impl SofMarker {
     /// Baseline DCT.
     pub const SOF0: Self = Self(0xC0);
