@@ -41,22 +41,22 @@ struct HuffmanLutL1 {
 // Index 0 AC
 // Index 1 DC
 // Index 1 AC
-@group(0) @binding(1) var<storage, read> huffman_l1: array<HuffmanLutL1, 4>;
+@group(1) @binding(0) var<storage, read> huffman_l1: array<HuffmanLutL1, 4>;
 
 // Level-2 LUT for huffman codes longer than 8 bits. See `huffman.rs` for more detail.
-@group(0) @binding(2) var<storage, read> huffman_l2: array<u32>;
+@group(1) @binding(1) var<storage, read> huffman_l2: array<u32>;
 
 // The preprocessed JPEG scan data.
 // This is raw byte data, but packed into `u32`s, since WebGPU doesn't have `u8`.
 // The preprocessing removes all RST markers, replaces all byte-stuffed 0xFF 0x00 sequences with
 // just 0xFF, and aligns every restart interval on a `u32` boundary so that the shader doesn't have
 // to do unnecessary bytewise processing.
-@group(0) @binding(3) var<storage, read> scan_data: array<u32>;
+@group(1) @binding(2) var<storage, read> scan_data: array<u32>;
 
 // List of word indices in `scan_data` where restart intervals begin.
-@group(0) @binding(4) var<storage, read> start_positions: array<u32>;
+@group(1) @binding(3) var<storage, read> start_positions: array<u32>;
 
-@group(0) @binding(5) var out: texture_storage_2d<rgba8uint, write>;
+@group(2) @binding(0) var out: texture_storage_2d<rgba8uint, write>;
 
 
 struct BitStreamState {
@@ -273,7 +273,7 @@ fn jpeg_decode(
                     for (var pos = 1u; pos < 64u; pos++) {
                         refill();
 
-                        let rrrrssss = huffdecode(achufftable);
+                        let rrrrssss = huffdecode(achufftable); // 16
                         if rrrrssss == 0u {
                             // Remaining ones are all 0.
                             break;
@@ -286,7 +286,7 @@ fn jpeg_decode(
                         let rrrr = rrrrssss >> 4u;
                         let ssss = rrrrssss & 0x0fu;
                         pos += rrrr;
-                        let val = i32(peek(ssss));
+                        let val = i32(peek(ssss));  // 15
                         consume(ssss);
 
                         let coeff = huff_extend(val, ssss);

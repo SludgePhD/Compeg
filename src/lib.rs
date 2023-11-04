@@ -51,7 +51,9 @@ const WORKGROUP_SIZE: u32 = 64;
 pub struct Gpu {
     device: Arc<Device>,
     queue: Arc<Queue>,
-    shared_bind_group_layout: Arc<BindGroupLayout>,
+    metadata_bgl: Arc<BindGroupLayout>,
+    huffman_bgl: Arc<BindGroupLayout>,
+    output_bgl: Arc<BindGroupLayout>,
     jpeg_decode_pipeline: ComputePipeline,
 }
 
@@ -90,81 +92,90 @@ impl Gpu {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
-        let shared_bind_group_layout =
-            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some("shared_bind_group_layout"),
-                entries: &[
-                    // `metadata`
-                    BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+        let metadata_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("metadata_bgl"),
+            entries: &[
+                // `metadata`
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    // `huffman_l1`
-                    BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+            ],
+        });
+        let huffman_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("huffman_bgl"),
+            entries: &[
+                // `huffman_l1`
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    // `huffman_l2`
-                    BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // `huffman_l2`
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    // `scan_data`
-                    BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // `scan_data`
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    // `scan_positions`
-                    BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // `scan_positions`
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    // `out`
-                    BindGroupLayoutEntry {
-                        binding: 5,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::StorageTexture {
-                            access: StorageTextureAccess::WriteOnly,
-                            format: OUTPUT_FORMAT,
-                            view_dimension: TextureViewDimension::D2,
-                        },
-                        count: None,
+                    count: None,
+                },
+            ],
+        });
+        let output_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("output_bgl"),
+            entries: &[
+                // `out`
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: OUTPUT_FORMAT,
+                        view_dimension: TextureViewDimension::D2,
                     },
-                ],
-            });
+                    count: None,
+                },
+            ],
+        });
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("shared_pipeline_layout"),
-            bind_group_layouts: &[&shared_bind_group_layout],
+            bind_group_layouts: &[&metadata_bgl, &huffman_bgl, &output_bgl],
             push_constant_ranges: &[],
         });
         let jpeg_decode_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
@@ -177,7 +188,9 @@ impl Gpu {
         Ok(Self {
             device,
             queue,
-            shared_bind_group_layout: Arc::new(shared_bind_group_layout),
+            metadata_bgl: Arc::new(metadata_bgl),
+            huffman_bgl: Arc::new(huffman_bgl),
+            output_bgl: Arc::new(output_bgl),
             jpeg_decode_pipeline,
         })
     }
@@ -196,7 +209,9 @@ pub struct Decoder {
     scan_data: DynamicBuffer,
     start_positions_buffer: DynamicBuffer,
     output: DynamicTexture,
-    shared_bind_group: DynamicBindGroup,
+    metadata_bg: DynamicBindGroup,
+    huffman_bg: DynamicBindGroup,
+    output_bg: DynamicBindGroup,
     scan_buffer: ScanBuffer,
 }
 
@@ -244,11 +259,10 @@ impl Decoder {
             OUTPUT_FORMAT,
         );
 
-        let shared_bind_group = DynamicBindGroup::new(
-            gpu.clone(),
-            gpu.shared_bind_group_layout.clone(),
-            "shared_bind_group",
-        );
+        let metadata_bg =
+            DynamicBindGroup::new(gpu.clone(), gpu.metadata_bgl.clone(), "metadata_bg");
+        let huffman_bg = DynamicBindGroup::new(gpu.clone(), gpu.huffman_bgl.clone(), "huffman_bg");
+        let output_bg = DynamicBindGroup::new(gpu.clone(), gpu.output_bgl.clone(), "output_bg");
 
         Self {
             gpu,
@@ -258,7 +272,9 @@ impl Decoder {
             scan_data,
             start_positions_buffer,
             output,
-            shared_bind_group,
+            metadata_bg,
+            huffman_bg,
+            output_bg,
             scan_buffer: ScanBuffer::new(),
         }
     }
@@ -294,18 +310,22 @@ impl Decoder {
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
 
-        let bind_group = self.shared_bind_group.bind_group(&[
-            self.metadata.as_entire_binding().into(),
+        let metadata_bg = self
+            .metadata_bg
+            .bind_group(&[self.metadata.as_entire_binding().into()]);
+        let huffman_bg = self.huffman_bg.bind_group(&[
             self.huffman_l1.as_entire_binding().into(),
             self.huffman_l2.as_resource(),
             self.scan_data.as_resource(),
             self.start_positions_buffer.as_resource(),
-            self.output.as_resource(),
         ]);
+        let output_bg = self.output_bg.bind_group(&[self.output.as_resource()]);
 
         let mut compute = enc.begin_compute_pass(&ComputePassDescriptor::default());
         let workgroups = (total_restart_intervals + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-        compute.set_bind_group(0, bind_group, &[]);
+        compute.set_bind_group(0, metadata_bg, &[]);
+        compute.set_bind_group(1, huffman_bg, &[]);
+        compute.set_bind_group(2, output_bg, &[]);
         compute.set_pipeline(&self.gpu.jpeg_decode_pipeline);
         compute.dispatch_workgroups(workgroups, 1, 1);
         drop(compute);
