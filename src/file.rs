@@ -1,6 +1,6 @@
 //! JPEG/JFIF file parser.
 
-#![allow(non_snake_case)]
+#![allow(non_snake_case, dead_code)]
 
 #[cfg(test)]
 mod tests;
@@ -16,76 +16,135 @@ pub struct JpegParser<'a> {
 }
 
 impl<'a> JpegParser<'a> {
-    pub fn new(buf: &'a [u8]) -> Self {
-        Self {
-            reader: Reader { buf, position: 0 },
+    pub fn new(buf: &'a [u8]) -> Result<Self> {
+        let mut reader = Reader { buf, position: 0 };
+        if reader.read_u8()? != 0xFF || reader.read_u8()? != 0xD8 {
+            return Err(Error::from(
+                "JPEG image does not start with SOI marker".to_string(),
+            ));
         }
+        Ok(Self { reader })
     }
 
+    /// Reads the next [`Segment`] from the JPEG data.
+    ///
+    /// This will not return `SOI`/`EOI` markers, since those are handled internally by the parser,
+    /// and are not the start of any marker segment.
+    ///
+    /// Returns `Ok(None)` when the EOI marker is encountered, signaling the end of the image.
     pub fn next_segment(&mut self) -> Result<Option<Segment<'a>>> {
-        if self.reader.remaining().is_empty() {
+        while self.reader.read_u8()? != 0xff {}
+
+        let segment_offset = self.reader.position - 1;
+        let marker = self.reader.read_u8()?;
+
+        if marker == 0x00 {
+            return Err(Error::from("invalid ff 00 marker".to_string()));
+        }
+
+        if marker == 0xD9 {
+            // EOI marker
+            if !self.reader.remaining().is_empty() {
+                log::warn!(
+                    "ignoring {} trailing bytes after EOI",
+                    self.reader.remaining().len()
+                );
+            }
+
             return Ok(None);
         }
 
-        while self.reader.read_u8()? != 0xff {}
+        // The standalone markers are SOI, EOI, TEM, and RSTn.
+        // SOI is read in `new`, EOI is handled above, RSTn is invalid outside of the scan data
+        // (which is emitted as part of the SOS segment), and TEM is invalid when encountered.
+        // Every remaining marker (even an unknown one) is followed by the segment length.
 
-        let position = self.reader.position - 1;
-        let marker = self.reader.read_u8()?;
-
+        let length = usize::from(self.reader.read_length()?);
+        let expected_end = self.reader.position + length;
         let kind = match marker {
-            0x00 => return Err(Error::from("invalid ff 00 marker".to_string())),
-            0xD8 => SegmentKind::Soi,
-            0xD9 => SegmentKind::Eoi,
-            0xDB => SegmentKind::Dqt(self.read_dqt()?),
-            0xC4 => SegmentKind::Dht(self.read_dht()?),
+            0xDB => Some(SegmentKind::Dqt(self.read_dqt(length)?)),
+            0xC4 => Some(SegmentKind::Dht(self.read_dht(length)?)),
             0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF => {
-                SegmentKind::Sof(self.read_sof(marker)?)
+                Some(SegmentKind::Sof(self.read_sof(marker)?))
             }
-            0xDA => SegmentKind::Sos(self.read_sos()?),
-            0xDD => SegmentKind::Dri(self.read_dri()?),
-            _ => SegmentKind::Other {
-                marker,
-                data: self.reader.read_segment()?.remaining(),
-            },
+            0xDA => Some(SegmentKind::Sos(self.read_sos()?)),
+            0xDD => Some(SegmentKind::Dri(self.read_dri()?)),
+            _ => {
+                self.reader.position = expected_end;
+                None
+            }
         };
 
+        // The segment specified a bigger length than what we ended up reading. Skip the remaining
+        // bytes and log a warning.
+        if self.reader.position < expected_end {
+            let remaining = expected_end - self.reader.position;
+            log::warn!(
+                "ff {:02x} segment specified a length of {} bytes, but {} remain after decoding",
+                marker,
+                length,
+                remaining,
+            );
+            self.reader.position = expected_end;
+        }
+
         Ok(Some(Segment {
-            pos: position,
+            marker,
+            raw_bytes: &self.reader.buf[segment_offset + 4..][..length],
+            offset: segment_offset,
             kind,
         }))
     }
 
-    fn read_dqt(&mut self) -> Result<Dqt<'a>> {
-        let mut seg = self.reader.read_segment()?;
-        let inner = seg.read_remaining_objs::<QuantizationTable>()?;
-        Ok(Dqt(inner))
+    /// Returns the remaining (unparsed) bytes of the input data.
+    pub fn remaining(&self) -> &'a [u8] {
+        self.reader.remaining()
     }
 
-    fn read_dht(&mut self) -> Result<Dht<'a>> {
+    fn read_dqt(&mut self, length: usize) -> Result<Dqt<'a>> {
+        // The size of the DQT segment tells us how many quantization tables there are.
+        // FIXME: does not support 16-bit qtables
+        let count = length / mem::size_of::<QuantizationTable>();
+        if count * mem::size_of::<QuantizationTable>() != length {
+            log::warn!(
+                "DQT segment with {} bytes should have been a multiple of {} bytes",
+                length,
+                mem::size_of::<QuantizationTable>()
+            );
+        }
+        let qts = self.reader.read_objs(count)?;
+        Ok(Dqt(qts))
+    }
+
+    fn read_dht(&mut self, mut length: usize) -> Result<Dht<'a>> {
         const MIN_DHT_LEN: usize = 18; // Tc+Th + 16 length bytes + at least one symbol-length assignment
 
-        let mut seg = self.reader.read_segment()?;
         let mut tables = Vec::new();
 
-        while seg.remaining().len() >= MIN_DHT_LEN {
-            let header: &DhtHeader = seg.read_obj()?;
-            let values = seg.read_slice(header.num_values())?;
+        while length >= MIN_DHT_LEN {
+            let pos = self.reader.position;
+
+            let header: &DhtHeader = self.reader.read_obj()?;
+            let values = self.reader.read_slice(header.num_values())?;
             tables.push(HuffmanTable {
                 header,
                 Vij: values,
             });
+
+            length -= self.reader.position - pos;
         }
 
         Ok(Dht { tables })
     }
 
     fn read_sof(&mut self, sof: u8) -> Result<Sof<'a>> {
-        let mut seg = self.reader.read_segment()?;
-        let P = seg.read_u8()?;
-        let Y = seg.read_u16()?;
-        let X = seg.read_u16()?;
-        let num_components = seg.read_u8()?;
-        let components = seg.read_objs::<FrameComponent>(num_components.into())?;
+        let P = self.reader.read_u8()?;
+        let Y = self.reader.read_u16()?;
+        let X = self.reader.read_u16()?;
+        let num_components = self.reader.read_u8()?;
+        let components = self
+            .reader
+            .read_objs::<FrameComponent>(num_components.into())?;
         Ok(Sof {
             sof: SofMarker(sof),
             P,
@@ -96,12 +155,11 @@ impl<'a> JpegParser<'a> {
     }
 
     fn read_sos(&mut self) -> Result<Sos<'a>> {
-        let mut seg = self.reader.read_segment()?;
-        let num_components = seg.read_u8()?;
-        let components = seg.read_objs(num_components.into())?;
-        let Ss = seg.read_u8()?;
-        let Se = seg.read_u8()?;
-        let AhAl = seg.read_u8()?;
+        let num_components = self.reader.read_u8()?;
+        let components = self.reader.read_objs(num_components.into())?;
+        let Ss = self.reader.read_u8()?;
+        let Se = self.reader.read_u8()?;
+        let AhAl = self.reader.read_u8()?;
 
         // The scan itself can contain `RST` markers. We skip them and include them in the scan
         // data.
@@ -120,7 +178,7 @@ impl<'a> JpegParser<'a> {
 
             match byte {
                 0x00 | 0xD0..=0xD7 => {
-                    // Include all RST markers in the scan data, since that's what VA-API expects.
+                    // Include all RST markers in the scan data.
                     self.reader.position += offset + 1;
                 }
                 _ => {
@@ -143,12 +201,12 @@ impl<'a> JpegParser<'a> {
     }
 
     fn read_dri(&mut self) -> Result<Dri> {
-        let mut seg = self.reader.read_segment()?;
-        let Ri = seg.read_u16()?;
+        let Ri = self.reader.read_u16()?;
         Ok(Dri { Ri })
     }
 }
 
+#[derive(Debug)]
 struct Reader<'a> {
     buf: &'a [u8],
     position: usize,
@@ -210,14 +268,10 @@ impl<'a> Reader<'a> {
         Ok(object)
     }
 
-    fn read_remaining_objs<T: AnyBitPattern>(&mut self) -> Result<&'a [T]> {
-        let count = self.remaining().len() / mem::size_of::<T>();
-        self.read_objs(count)
-    }
-
     fn read_objs<T: AnyBitPattern>(&mut self, count: usize) -> Result<&'a [T]> {
         assert_eq!(mem::align_of::<T>(), 1);
 
+        // TODO: bounds check
         let byte_count = count * mem::size_of::<T>();
         let slice = bytemuck::cast_slice(&self.remaining()[..byte_count]);
         self.position += byte_count;
@@ -225,37 +279,64 @@ impl<'a> Reader<'a> {
     }
 
     fn read_length(&mut self) -> Result<u16> {
+        // Length parameter is the length of the segment parameters, including the length parameter,
+        // but excluding the FF xx marker.
+
         let len = self.read_u16()?;
         if len < 2 {
             return Err(Error::from(format!("invalid segment length {len}")));
         }
-        Ok(len)
-    }
-
-    fn read_segment(&mut self) -> Result<Reader<'a>> {
-        let len = usize::from(self.read_length()?) - 2;
-        if self.remaining().len() < len {
+        if self.remaining().len() < (len - 2).into() {
             return Err(Error::from(
                 "reached end of data while decoding JPEG stream".to_string(),
             ));
         }
-
-        let r = Reader {
-            buf: &self.remaining()[..len],
-            position: 0,
-        };
-        self.position += len;
-        Ok(r)
+        Ok(len - 2)
     }
 }
 
+/// A segment of a JPEG file, introduced by a `0xFF 0xXX` marker.
 #[derive(Debug)]
 pub struct Segment<'a> {
-    /// Offset of the segment's marker in the input buffer.
-    pub pos: usize,
-    pub kind: SegmentKind<'a>,
+    marker: u8,
+    raw_bytes: &'a [u8],
+    offset: usize,
+    kind: Option<SegmentKind<'a>>,
 }
 
+impl<'a> Segment<'a> {
+    /// Returns the offset of the segment's `0xFF 0xXX` marker in the input buffer.
+    #[inline]
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
+    /// Returns the value of the marker byte indicating the type of the segment.
+    ///
+    /// All segments begin with a `0xFF 0xXX` marker. This function returns the value of the `0xXX`
+    /// byte, which identifies the type of the segment.
+    #[inline]
+    pub fn marker(&self) -> u8 {
+        self.marker
+    }
+
+    /// The raw bytes making up this segment, exluding the `0xFF 0xXX` marker and the segment length
+    /// indication.
+    ///
+    /// This only includes as many bytes as specified by the segment header, not any data following
+    /// the segment, so for example for an SOS segment it does not include any of the entropy-coded
+    /// data following the segment.
+    #[inline]
+    pub fn raw_bytes(&self) -> &[u8] {
+        self.raw_bytes
+    }
+
+    pub fn as_segment_kind(&self) -> Option<&SegmentKind<'a>> {
+        self.kind.as_ref()
+    }
+}
+
+/// Enumeration of segment kinds understood by this parser.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum SegmentKind<'a> {
@@ -264,18 +345,6 @@ pub enum SegmentKind<'a> {
     Dri(Dri),
     Sof(Sof<'a>),
     Sos(Sos<'a>),
-    /// **S**tart **O**f **I**mage.
-    ///
-    /// In well-formed JPEG files, this is always the very first marker.
-    Soi,
-    /// **E**nd **O**f **I**mage.
-    ///
-    /// In well-formed JPEG files, this is always the last marker.
-    Eoi,
-    Other {
-        marker: u8,
-        data: &'a [u8],
-    },
 }
 
 #[derive(Copy, Clone, AnyBitPattern)]
@@ -320,11 +389,12 @@ impl fmt::Debug for QuantizationTable {
     }
 }
 
-/// **DQT** Define Quantization Table – defines one or more [`QuantizationTable`]s.
+/// **D**efine **Q**uantization **T**ables – sets one or more [`QuantizationTable`]s.
 #[derive(Debug)]
 pub struct Dqt<'a>(&'a [QuantizationTable]);
 
 impl<'a> Dqt<'a> {
+    #[inline]
     pub fn tables(&self) -> impl Iterator<Item = &QuantizationTable> {
         self.0.iter()
     }
@@ -397,7 +467,15 @@ impl<'a> Dht<'a> {
     }
 }
 
-/// **DRI** Define Restart Interval.
+/// **D**efine **R**estart **I**nterval.
+///
+/// This segment enables the use of *Restart Intervals* and sets the number of MCUs contained in
+/// each of them ([`Dri::Ri`]).
+///
+/// *Restart Intervals* are often used by hardware JPEG encoders to allow parallelizing the encoding
+/// process. They enable parallelization of the decoding step as well. Additionally, they make the
+/// image more robust against data corruption, by preventing corruption from affecting more than the
+/// restart interval it occurs in.
 #[derive(Debug, Clone, Copy, AnyBitPattern)]
 pub struct Dri {
     Ri: u16,
@@ -473,8 +551,6 @@ impl fmt::Debug for SofMarker {
 #[allow(dead_code)]
 impl SofMarker {
     /// Baseline DCT.
-    ///
-    /// This is the *only* type of image that we support.
     pub const SOF0: Self = Self(0xC0);
     /// Extended Sequential DCT.
     pub const SOF1: Self = Self(0xC1);

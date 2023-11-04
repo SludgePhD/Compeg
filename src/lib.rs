@@ -444,9 +444,12 @@ impl<'a> ImageData<'a> {
         let mut component_dchuff = [0; 3];
         let mut component_achuff = [0; 3];
 
-        let mut parser = JpegParser::new(&jpeg);
+        let mut parser = JpegParser::new(&jpeg)?;
         while let Some(segment) = parser.next_segment()? {
-            match segment.kind {
+            let Some(kind) = segment.as_segment_kind() else {
+                continue;
+            };
+            match kind {
                 SegmentKind::Sof(sof) => {
                     if sof.sof() != SofMarker::SOF0 {
                         bail!("not a baseline JPEG (SOF={:?})", sof.sof());
@@ -463,9 +466,9 @@ impl<'a> ImageData<'a> {
                     match sof.components() {
                         [y, u, v] => {
                             log::trace!("frame components:");
-                            log::trace!("{:?}", y);
-                            log::trace!("{:?}", u);
-                            log::trace!("{:?}", v);
+                            log::trace!("- {:?}", y);
+                            log::trace!("- {:?}", u);
+                            log::trace!("- {:?}", v);
 
                             if y.Tqi() > 3 || u.Tqi() > 3 || v.Tqi() > 3 {
                                 bail!("invalid quantization table selection [{},{},{}] (only tables 0-3 are valid)", y.Tqi(), u.Tqi(), v.Tqi());
@@ -558,9 +561,9 @@ impl<'a> ImageData<'a> {
                     match sos.components() {
                         [y,u,v] => {
                             log::trace!("scan components:");
-                            log::trace!("{:?}", y);
-                            log::trace!("{:?}", u);
-                            log::trace!("{:?}", v);
+                            log::trace!("- {:?}", y);
+                            log::trace!("- {:?}", u);
+                            log::trace!("- {:?}", v);
 
                             let scan_indices = [y.Csj(), u.Csj(), v.Csj()];
                             if component_indices != scan_indices {
@@ -575,8 +578,6 @@ impl<'a> ImageData<'a> {
 
                     scan_data = Some((sos.data_offset(), sos.data().len()));
                 }
-                SegmentKind::Eoi => break,
-                _ => {}
             }
         }
 
