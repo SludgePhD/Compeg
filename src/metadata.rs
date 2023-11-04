@@ -32,4 +32,5 @@ pub struct Metadata {
     pub max_hsample: u32,
     /// Max `Vi` of all the components.
     pub max_vsample: u32,
+    pub dus_per_mcu: u32,
 }

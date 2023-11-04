@@ -50,6 +50,7 @@ impl DynamicBuffer {
             });
 
             // Schedule a copy from the old to the new buffer.
+            // TODO: this might be unneeded
             let mut enc = self.gpu.device.create_command_encoder(&Default::default());
             enc.copy_buffer_to_buffer(&self.buffer, 0, &new_buffer, 0, self.buffer.size());
             self.gpu.queue.submit([enc.finish()]);

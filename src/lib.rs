@@ -53,8 +53,10 @@ pub struct Gpu {
     queue: Arc<Queue>,
     metadata_bgl: Arc<BindGroupLayout>,
     huffman_bgl: Arc<BindGroupLayout>,
+    coefficients_bgl: Arc<BindGroupLayout>,
     output_bgl: Arc<BindGroupLayout>,
-    jpeg_decode_pipeline: ComputePipeline,
+    huffman_decode_pipeline: ComputePipeline,
+    dct_pipeline: ComputePipeline,
 }
 
 impl Gpu {
@@ -87,9 +89,18 @@ impl Gpu {
 
     /// Creates a [`Gpu`] handle from an existing [`wgpu`] [`Device`] and [`Queue`].
     pub fn from_wgpu(device: Arc<Device>, queue: Arc<Queue>) -> Result<Self> {
-        let shader = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("main_shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        let shared = include_str!("shared.wgsl");
+        let huffman = include_str!("huffman.wgsl");
+        let dct = include_str!("dct.wgsl");
+        let huffman = format!("{shared}\n\n{huffman}");
+        let dct = format!("{shared}\n\n{dct}");
+        let huffman = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("huffman"),
+            source: wgpu::ShaderSource::Wgsl(huffman.into()),
+        });
+        let dct = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("dct"),
+            source: wgpu::ShaderSource::Wgsl(dct.into()),
         });
 
         let metadata_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -157,6 +168,22 @@ impl Gpu {
                 },
             ],
         });
+        let coefficients_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("coefficients_bgl"),
+            entries: &[
+                // `coefficients`
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
         let output_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("output_bgl"),
             entries: &[
@@ -173,16 +200,25 @@ impl Gpu {
                 },
             ],
         });
-        let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("shared_pipeline_layout"),
-            bind_group_layouts: &[&metadata_bgl, &huffman_bgl, &output_bgl],
-            push_constant_ranges: &[],
+        let huffman_decode_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("huffman_decode_pipeline"),
+            layout: Some(&device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[&metadata_bgl, &huffman_bgl, &coefficients_bgl],
+                push_constant_ranges: &[],
+            })),
+            module: &huffman,
+            entry_point: "huffman",
         });
-        let jpeg_decode_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
-            label: Some("jpeg_decode_pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: "jpeg_decode",
+        let dct_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("dct_pipeline"),
+            layout: Some(&device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[&metadata_bgl, &coefficients_bgl, &output_bgl],
+                push_constant_ranges: &[],
+            })),
+            module: &dct,
+            entry_point: "dct",
         });
 
         Ok(Self {
@@ -190,8 +226,10 @@ impl Gpu {
             queue,
             metadata_bgl: Arc::new(metadata_bgl),
             huffman_bgl: Arc::new(huffman_bgl),
+            coefficients_bgl: Arc::new(coefficients_bgl),
             output_bgl: Arc::new(output_bgl),
-            jpeg_decode_pipeline,
+            huffman_decode_pipeline,
+            dct_pipeline,
         })
     }
 }
@@ -208,9 +246,11 @@ pub struct Decoder {
     /// the main input data to the shader pipeline.
     scan_data: DynamicBuffer,
     start_positions_buffer: DynamicBuffer,
+    coefficients: DynamicBuffer,
     output: DynamicTexture,
     metadata_bg: DynamicBindGroup,
     huffman_bg: DynamicBindGroup,
+    coefficients_bg: DynamicBindGroup,
     output_bg: DynamicBindGroup,
     scan_buffer: ScanBuffer,
 }
@@ -251,6 +291,7 @@ impl Decoder {
             "start_positions",
             BufferUsages::COPY_DST | BufferUsages::STORAGE,
         );
+        let coefficients = DynamicBuffer::new(gpu.clone(), "coefficients", BufferUsages::STORAGE);
 
         let output = DynamicTexture::new(
             gpu.clone(),
@@ -262,6 +303,8 @@ impl Decoder {
         let metadata_bg =
             DynamicBindGroup::new(gpu.clone(), gpu.metadata_bgl.clone(), "metadata_bg");
         let huffman_bg = DynamicBindGroup::new(gpu.clone(), gpu.huffman_bgl.clone(), "huffman_bg");
+        let coefficients_bg =
+            DynamicBindGroup::new(gpu.clone(), gpu.coefficients_bgl.clone(), "coefficients_bg");
         let output_bg = DynamicBindGroup::new(gpu.clone(), gpu.output_bgl.clone(), "output_bg");
 
         Self {
@@ -271,9 +314,11 @@ impl Decoder {
             huffman_l2,
             scan_data,
             start_positions_buffer,
+            coefficients,
             output,
             metadata_bg,
             huffman_bg,
+            coefficients_bg,
             output_bg,
             scan_buffer: ScanBuffer::new(),
         }
@@ -286,6 +331,8 @@ impl Decoder {
         let texture_changed = self.output.reserve(data.width(), data.height());
 
         let total_restart_intervals = data.metadata.total_restart_intervals;
+        let total_mcus = total_restart_intervals * data.metadata.restart_interval;
+        let total_dus = u64::from(total_mcus) * u64::from(data.metadata.dus_per_mcu);
         let t_preprocess = time(|| {
             self.scan_buffer
                 .process(data.scan_data(), total_restart_intervals)
@@ -303,6 +350,9 @@ impl Decoder {
                 .queue
                 .write_buffer(&self.huffman_l1, 0, data.huffman_tables.l1_data());
             self.huffman_l2.write(data.huffman_tables.l2_data());
+
+            // Reserve space for the decoded coefficients. There are 64 32-bit values per data unit.
+            self.coefficients.reserve(4 * 64 * total_dus);
         });
 
         let mut enc = self
@@ -319,21 +369,39 @@ impl Decoder {
             self.scan_data.as_resource(),
             self.start_positions_buffer.as_resource(),
         ]);
+        let coefficients_bg = self
+            .coefficients_bg
+            .bind_group(&[self.coefficients.as_resource()]);
         let output_bg = self.output_bg.bind_group(&[self.output.as_resource()]);
 
         let mut compute = enc.begin_compute_pass(&ComputePassDescriptor::default());
-        let workgroups = (total_restart_intervals + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let huffman_workgroups = (total_restart_intervals + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let dct_workgroups = (total_mcus + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+
         compute.set_bind_group(0, metadata_bg, &[]);
         compute.set_bind_group(1, huffman_bg, &[]);
+        compute.set_bind_group(2, coefficients_bg, &[]);
+        compute.set_pipeline(&self.gpu.huffman_decode_pipeline);
+        compute.dispatch_workgroups(huffman_workgroups, 1, 1);
+
+        compute.set_bind_group(0, metadata_bg, &[]);
+        compute.set_bind_group(1, coefficients_bg, &[]);
         compute.set_bind_group(2, output_bg, &[]);
-        compute.set_pipeline(&self.gpu.jpeg_decode_pipeline);
-        compute.dispatch_workgroups(workgroups, 1, 1);
+        compute.set_pipeline(&self.gpu.dct_pipeline);
+        compute.dispatch_workgroups(dct_workgroups, 1, 1);
+
         drop(compute);
 
         log::trace!(
-            "dispatching {} workgroups ({} shader invocations; {} restart intervals)",
-            workgroups,
-            workgroups * WORKGROUP_SIZE,
+            "dispatching {} workgroups for huffman decoding ({} shader invocations; {} restart intervals)",
+            huffman_workgroups,
+            huffman_workgroups * WORKGROUP_SIZE,
+            total_restart_intervals,
+        );
+        log::trace!(
+            "dispatching {} workgroups for IDCT ({} shader invocations; {} MCUs)",
+            huffman_workgroups,
+            huffman_workgroups * WORKGROUP_SIZE,
             total_restart_intervals,
         );
 
@@ -620,6 +688,12 @@ impl<'a> ImageData<'a> {
             bail!("missing DRI/SOS/SOI marker");
         };
 
+        let dus_per_mcu = components
+            .iter()
+            .map(|c| c.Hi() * c.Vi())
+            .sum::<u8>()
+            .into();
+
         let max_hsample = components.iter().map(|c| c.Hi()).max().unwrap().into();
         let max_vsample = components.iter().map(|c| c.Vi()).max().unwrap().into();
         let width_dus = u32::from((width + 7) / 8);
@@ -651,6 +725,7 @@ impl<'a> ImageData<'a> {
             width_mcus,
             max_hsample,
             max_vsample,
+            dus_per_mcu,
         };
 
         let huffman_tables = HuffmanTables::new(huffman_tables);
