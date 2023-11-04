@@ -305,7 +305,7 @@ fn jpeg_decode(
         }
 
         // All components have now been written to the MCU buffer and can be processed together.
-        mcu_buffer_flush(id.x + i);
+        mcu_buffer_flush(id.x * metadata.restart_interval + i);
     }
 }
 
