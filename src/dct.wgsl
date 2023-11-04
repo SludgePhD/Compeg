@@ -226,85 +226,72 @@ fn idct_float_fast(in_vector_: array<i32, 64>) -> array<i32, 64> {
 
     var ws = array<f32, 64>();
 
-    var tmp0: f32;
-    var tmp1: f32;
-    var tmp2: f32;
-    var tmp3: f32;
-    var tmp4: f32;
-    var tmp5: f32;
-    var tmp6: f32;
-    var tmp7: f32;
-    var tmp10: f32;
-    var tmp11: f32;
-    var tmp12: f32;
-    var tmp13: f32;
-
     for (var icol = 0u; icol < DCT_SIZE; icol++) {
         /* even part */
 
-        tmp0 = in_vector[DCT_SIZE * 0u + icol] * 0.125;
-        tmp1 = in_vector[DCT_SIZE * 2u + icol] * 0.125;
-        tmp2 = in_vector[DCT_SIZE * 4u + icol] * 0.125;
-        tmp3 = in_vector[DCT_SIZE * 6u + icol] * 0.125;
+        let tmp0 = in_vector[DCT_SIZE * 0u + icol] * 0.125;
+        let tmp1 = in_vector[DCT_SIZE * 2u + icol] * 0.125;
+        let tmp2 = in_vector[DCT_SIZE * 4u + icol] * 0.125;
+        let tmp3 = in_vector[DCT_SIZE * 6u + icol] * 0.125;
 
-        tmp10 = tmp0 + tmp2;
-        tmp11 = tmp0 - tmp2;
+        let tmp10 = tmp0 + tmp2;
+        let tmp11 = tmp0 - tmp2;
 
-        tmp13 = tmp1 + tmp3;
-        tmp12 = (tmp1 - tmp3) * 1.414213562 - tmp13;
+        let tmp13 = tmp1 + tmp3;
+        let tmp12 = (tmp1 - tmp3) * 1.414213562 - tmp13;
 
-        tmp0 = tmp10 + tmp13;
-        tmp3 = tmp10 - tmp13;
-        tmp1 = tmp11 + tmp12;
-        tmp2 = tmp11 - tmp12;
+        let tmp0i = tmp10 + tmp13;
+        let tmp3i = tmp10 - tmp13;
+        let tmp1i = tmp11 + tmp12;
+        let tmp2i = tmp11 - tmp12;
 
         /* odd part */
 
-        tmp4 = in_vector[DCT_SIZE * 1u + icol] * 0.125;
-        tmp5 = in_vector[DCT_SIZE * 3u + icol] * 0.125;
-        tmp6 = in_vector[DCT_SIZE * 5u + icol] * 0.125;
-        tmp7 = in_vector[DCT_SIZE * 7u + icol] * 0.125;
+        let tmp4 = in_vector[DCT_SIZE * 1u + icol] * 0.125;
+        let tmp5 = in_vector[DCT_SIZE * 3u + icol] * 0.125;
+        let tmp6 = in_vector[DCT_SIZE * 5u + icol] * 0.125;
+        let tmp7 = in_vector[DCT_SIZE * 7u + icol] * 0.125;
 
         let z13 = tmp6 + tmp5;
         let z10 = tmp6 - tmp5;
         let z11 = tmp4 + tmp7;
         let z12 = tmp4 - tmp7;
 
-        tmp7 = z11 + z13;
-        tmp11 = (z11 - z13) * 1.414213562;
+        let tmp7i = z11 + z13;
+        let tmp11i = (z11 - z13) * 1.414213562;
 
         let z5 = (z10 + z12) * 1.847759065;
-        tmp10 = z5 - z12 * 1.082392200;
-        tmp12 = z5 - z10 * 2.613125930;
+        let tmp10i = z5 - z12 * 1.082392200;
+        let tmp12i = z5 - z10 * 2.613125930;
 
-        tmp6 = tmp12 - tmp7;
-        tmp5 = tmp11 - tmp6;
-        tmp4 = tmp10 - tmp5;
+        let tmp6i = tmp12i - tmp7i;
+        let tmp5i = tmp11i - tmp6i;
+        let tmp4i = tmp10i - tmp5i;
 
-        ws[DCT_SIZE * 0u + icol] = tmp0 + tmp7;
-        ws[DCT_SIZE * 7u + icol] = tmp0 - tmp7;
-        ws[DCT_SIZE * 1u + icol] = tmp1 + tmp6;
-        ws[DCT_SIZE * 6u + icol] = tmp1 - tmp6;
-        ws[DCT_SIZE * 2u + icol] = tmp2 + tmp5;
-        ws[DCT_SIZE * 5u + icol] = tmp2 - tmp5;
-        ws[DCT_SIZE * 3u + icol] = tmp3 + tmp4;
-        ws[DCT_SIZE * 4u + icol] = tmp3 - tmp4;
+        ws[DCT_SIZE * 0u + icol] = tmp0i + tmp7i;
+        ws[DCT_SIZE * 7u + icol] = tmp0i - tmp7i;
+        ws[DCT_SIZE * 1u + icol] = tmp1i + tmp6i;
+        ws[DCT_SIZE * 6u + icol] = tmp1i - tmp6i;
+        ws[DCT_SIZE * 2u + icol] = tmp2i + tmp5i;
+        ws[DCT_SIZE * 5u + icol] = tmp2i - tmp5i;
+        ws[DCT_SIZE * 3u + icol] = tmp3i + tmp4i;
+        ws[DCT_SIZE * 4u + icol] = tmp3i - tmp4i;
     }
 
     for (var row = 0u; row < DCT_SIZE; row++) {
         /* even part */
 
-        var z5 = ws[row * DCT_SIZE + 0u] + 128.5;
-        tmp10 = z5 + ws[row * DCT_SIZE + 4u];
-        tmp11 = z5 - ws[row * DCT_SIZE + 4u];
+        let z5 = ws[row * DCT_SIZE + 0u] + 128.5;
+        let tmp10 = z5 + ws[row * DCT_SIZE + 4u];
+        let tmp11 = z5 - ws[row * DCT_SIZE + 4u];
 
-        tmp13 = ws[row * DCT_SIZE + 2u] + ws[row * DCT_SIZE + 6u];
-        tmp12 = (ws[row * DCT_SIZE + 2u] - ws[row * DCT_SIZE + 6u]) * 1.414213562 - tmp13;
+        let tmp13 = ws[row * DCT_SIZE + 2u] + ws[row * DCT_SIZE + 6u];
+        let tmp12 = (ws[row * DCT_SIZE + 2u] - ws[row * DCT_SIZE + 6u]) * 1.414213562 - tmp13;
 
-        tmp0 = tmp10 + tmp13;
-        tmp3 = tmp10 - tmp13;
-        tmp1 = tmp11 + tmp12;
-        tmp2 = tmp11 - tmp12;
+        let tmp0 = tmp10 + tmp13;
+        let tmp3 = tmp10 - tmp13;
+        let tmp1 = tmp11 + tmp12;
+        let tmp2 = tmp11 - tmp12;
 
         /* odd part */
 
@@ -313,16 +300,16 @@ fn idct_float_fast(in_vector_: array<i32, 64>) -> array<i32, 64> {
         let z11 = ws[row * DCT_SIZE + 1u] + ws[row * DCT_SIZE + 7u];
         let z12 = ws[row * DCT_SIZE + 1u] - ws[row * DCT_SIZE + 7u];
 
-        tmp7 = z11 + z13;
-        tmp11 = (z11 - z13) * 1.414213562;
+        let tmp7 = z11 + z13;
+        let tmp11i = (z11 - z13) * 1.414213562;
 
-        z5 = (z10 + z12) * 1.847759065;
-        tmp10 = z5 - z12 * 1.082392200;
-        tmp12 = z5 - z10 * 2.613125930;
+        let z5i = (z10 + z12) * 1.847759065;
+        let tmp10i = z5i - z12 * 1.082392200;
+        let tmp12i = z5i - z10 * 2.613125930;
 
-        tmp6 = tmp12 - tmp7;
-        tmp5 = tmp11 - tmp6;
-        tmp4 = tmp10 - tmp5;
+        let tmp6 = tmp12i - tmp7;
+        let tmp5 = tmp11i - tmp6;
+        let tmp4 = tmp10i - tmp5;
 
         out_vector[row * DCT_SIZE + 0u] = clamp(i32(tmp0 + tmp7), 0, 255);
         out_vector[row * DCT_SIZE + 7u] = clamp(i32(tmp0 - tmp7), 0, 255);
