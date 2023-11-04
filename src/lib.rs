@@ -355,11 +355,6 @@ impl Decoder {
             self.coefficients.reserve(4 * 64 * total_dus);
         });
 
-        let mut enc = self
-            .gpu
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor::default());
-
         let metadata_bg = self
             .metadata_bg
             .bind_group(&[self.metadata.as_entire_binding().into()]);
@@ -373,6 +368,12 @@ impl Decoder {
             .coefficients_bg
             .bind_group(&[self.coefficients.as_resource()]);
         let output_bg = self.output_bg.bind_group(&[self.output.as_resource()]);
+
+        let mut enc = self
+            .gpu
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor::default());
+        enc.clear_buffer(self.coefficients.buffer(), 0, None);
 
         let mut compute = enc.begin_compute_pass(&ComputePassDescriptor::default());
         let huffman_workgroups = (total_restart_intervals + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;

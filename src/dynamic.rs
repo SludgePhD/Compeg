@@ -72,6 +72,10 @@ impl DynamicBuffer {
     pub fn as_resource(&self) -> DynamicBindingResource<'_> {
         DynamicBindingResource::Buffer(self)
     }
+
+    pub fn buffer(&self) -> &Buffer {
+        &self.buffer
+    }
 }
 
 /// A buffer for downloading data from a [`DynamicBuffer`].
