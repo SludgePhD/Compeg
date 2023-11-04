@@ -202,9 +202,26 @@ fn idct_float_naive(in_vector_: array<i32, 64>) -> array<i32, 64> {
     return out_vector;
 }
 
+const SCALE = array(
+    1.0, 1.387039845, 1.306562965, 1.175875602,
+    1.0, 0.785694958, 0.541196100, 0.275899379,
+);
+
 const DCT_SIZE = 8u;
 fn idct_float_fast(in_vector_: array<i32, 64>) -> array<i32, 64> {
-    var in_vector = in_vector_;
+    // Premultiply with the scaling values.
+    // See:
+    // https://github.com/libjpeg-turbo/libjpeg-turbo/blob/ec32420f6b5dfa4e86883d42b209e8371e55aeb5/jddctmgr.c#L303-L324
+    var scale = SCALE;
+    var in_vector_int = in_vector_;
+    var in_vector = array<f32, 64>();
+    for (var col = 0u; col < DCT_SIZE; col++) {
+        for (var row = 0u; row < DCT_SIZE; row++) {
+            let mul = scale[row] * scale[col];
+            in_vector[row * DCT_SIZE + col] = f32(in_vector_int[row * DCT_SIZE + col]) * mul;
+        }
+    }
+
     var out_vector = array<i32, 64>();
 
     var ws = array<f32, 64>();
@@ -225,10 +242,10 @@ fn idct_float_fast(in_vector_: array<i32, 64>) -> array<i32, 64> {
     for (var icol = 0u; icol < DCT_SIZE; icol++) {
         /* even part */
 
-        tmp0 = f32(in_vector[DCT_SIZE * 0u + icol]) * 0.125;
-        tmp1 = f32(in_vector[DCT_SIZE * 2u + icol]) * 0.125;
-        tmp2 = f32(in_vector[DCT_SIZE * 4u + icol]) * 0.125;
-        tmp3 = f32(in_vector[DCT_SIZE * 6u + icol]) * 0.125;
+        tmp0 = in_vector[DCT_SIZE * 0u + icol] * 0.125;
+        tmp1 = in_vector[DCT_SIZE * 2u + icol] * 0.125;
+        tmp2 = in_vector[DCT_SIZE * 4u + icol] * 0.125;
+        tmp3 = in_vector[DCT_SIZE * 6u + icol] * 0.125;
 
         tmp10 = tmp0 + tmp2;
         tmp11 = tmp0 - tmp2;
@@ -243,10 +260,10 @@ fn idct_float_fast(in_vector_: array<i32, 64>) -> array<i32, 64> {
 
         /* odd part */
 
-        tmp4 = f32(in_vector[DCT_SIZE * 1u + icol]) * 0.125;
-        tmp5 = f32(in_vector[DCT_SIZE * 3u + icol]) * 0.125;
-        tmp6 = f32(in_vector[DCT_SIZE * 5u + icol]) * 0.125;
-        tmp7 = f32(in_vector[DCT_SIZE * 7u + icol]) * 0.125;
+        tmp4 = in_vector[DCT_SIZE * 1u + icol] * 0.125;
+        tmp5 = in_vector[DCT_SIZE * 3u + icol] * 0.125;
+        tmp6 = in_vector[DCT_SIZE * 5u + icol] * 0.125;
+        tmp7 = in_vector[DCT_SIZE * 7u + icol] * 0.125;
 
         let z13 = tmp6 + tmp5;
         let z10 = tmp6 - tmp5;
