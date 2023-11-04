@@ -1,5 +1,5 @@
-0002 [FF E0] App(App { n: 0, kind: Some(Jfif(Jfif { major_version: 1, minor_version: 1, unit: DotsPerInch, xdensity: 72, ydensity: 72, xthumbnail: 0, ythumbnail: 0, thumbnail: [] })) })
-0014 [FF DB] Dqt(Dqt([QuantizationTable { Pq: 0, Tq: 0, Qk: [3, 2, 2, 3, 2, 2, 3, 3, 3, 3, 4, 3, 3, 4, 5, 8, 5, 5, 4, 4, 5, 10, 7, 7, 6, 8, 12, 10, 12, 12, 11, 10, 11, 11, 13, 14, 18, 16, 13, 14, 17, 14, 11, 11, 16, 22, 16, 17, 19, 20, 21, 21, 21, 12, 15, 23, 24, 22, 20, 24, 18, 20, 21, 20] }]))
-0059 [FF C2] Sof(Sof { sof: SOF2, P: 8, Y: 8, X: 8, components: [FrameComponent { Ci: 1, Hi: 1, Vi: 1, Tqi: 0 }] })
-0066 [FF C4] Dht(Dht { tables: [HuffmanTable { Tc: 0, Th: 0, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [8] }] })
-007C [FF DA] Sos(Sos { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }], Ss: 0, Se: 0, Ah: 0, Al: 1, data: [84, 255, 0] })
+0002 [FF E0] APP { n: 0, kind: Some(JFIF(JFIF { major_version: 1, minor_version: 1, unit: DotsPerInch, xdensity: 72, ydensity: 72, xthumbnail: 0, ythumbnail: 0, thumbnail: [] })) }
+0014 [FF DB] DQT([QuantizationTable { Pq: 0, Tq: 0, Qk: [3, 2, 2, 3, 2, 2, 3, 3, 3, 3, 4, 3, 3, 4, 5, 8, 5, 5, 4, 4, 5, 10, 7, 7, 6, 8, 12, 10, 12, 12, 11, 10, 11, 11, 13, 14, 18, 16, 13, 14, 17, 14, 11, 11, 16, 22, 16, 17, 19, 20, 21, 21, 21, 12, 15, 23, 24, 22, 20, 24, 18, 20, 21, 20] }])
+0059 [FF C2] SOF { sof: SOF2, P: 8, Y: 8, X: 8, components: [FrameComponent { Ci: 1, Hi: 1, Vi: 1, Tqi: 0 }] }
+0066 [FF C4] DHT { tables: [HuffmanTable { Tc: 0, Th: 0, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [8] }] }
+007C [FF DA] SOS { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }], Ss: 0, Se: 0, Ah: 0, Al: 1, data: [84, 255, 0] }

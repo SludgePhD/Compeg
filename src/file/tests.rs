@@ -23,7 +23,7 @@ fn dump(jpeg: &[u8]) -> String {
                 Some(kind) => {
                     write!(out, "{:?}", kind).unwrap();
                     match kind {
-                        SegmentKind::App(app) if app.as_app_kind().is_none() => {
+                        SegmentKind::APP(app) if app.as_app_kind().is_none() => {
                             // Dump bytes of unknown APP segments too.
                             writeln!(out, " {:x?}", segment.raw_bytes()).unwrap();
                         }
@@ -141,7 +141,7 @@ fn app() {
             0xFF, 0xD9, // EOI
         ],
         expect![[r#"
-            0002 [FF E0] App(App { n: 0, kind: None }) []
+            0002 [FF E0] APP { n: 0, kind: None } []
         "#]],
     );
     check(
@@ -153,7 +153,7 @@ fn app() {
             0xFF, 0xD9, // EOI
         ],
         expect![[r#"
-            0002 [FF E0] App(App { n: 0, kind: None }) [0, 0]
+            0002 [FF E0] APP { n: 0, kind: None } [0, 0]
         "#]],
     );
     check(
@@ -168,8 +168,8 @@ fn app() {
             0xFF, 0xD9, // EOI
         ],
         expect![[r#"
-            0002 [FF E0] App(App { n: 0, kind: None }) [0, 0]
-            0008 [FF DD] Dri(Dri { Ri: 15 })
+            0002 [FF E0] APP { n: 0, kind: None } [0, 0]
+            0008 [FF DD] DRI { Ri: 15 }
         "#]],
     );
 }

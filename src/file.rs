@@ -68,15 +68,15 @@ impl<'a> JpegParser<'a> {
             position: self.reader.position,
         };
         let kind = match marker {
-            0xDB => Some(SegmentKind::Dqt(self.read_dqt(&mut reader)?)),
-            0xC4 => Some(SegmentKind::Dht(self.read_dht(&mut reader)?)),
+            0xDB => Some(SegmentKind::DQT(self.read_dqt(&mut reader)?)),
+            0xC4 => Some(SegmentKind::DHT(self.read_dht(&mut reader)?)),
             0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF => {
-                Some(SegmentKind::Sof(self.read_sof(marker, &mut reader)?))
+                Some(SegmentKind::SOF(self.read_sof(marker, &mut reader)?))
             }
-            0xDA => Some(SegmentKind::Sos(self.read_sos(&mut reader)?)),
-            0xDD => Some(SegmentKind::Dri(self.read_dri(&mut reader)?)),
-            0xE0..=0xEF => Some(SegmentKind::App(self.read_app(marker, &mut reader)?)),
-            0xFE => Some(SegmentKind::Com(self.read_com(&mut reader)?)),
+            0xDA => Some(SegmentKind::SOS(self.read_sos(&mut reader)?)),
+            0xDD => Some(SegmentKind::DRI(self.read_dri(&mut reader)?)),
+            0xE0..=0xEF => Some(SegmentKind::APP(self.read_app(marker, &mut reader)?)),
+            0xFE => Some(SegmentKind::COM(self.read_com(&mut reader)?)),
             _ => {
                 self.reader.position = expected_end;
                 None
@@ -112,7 +112,7 @@ impl<'a> JpegParser<'a> {
         self.reader.remaining()
     }
 
-    fn read_dqt(&mut self, reader: &mut Reader<'a>) -> Result<Dqt<'a>> {
+    fn read_dqt(&mut self, reader: &mut Reader<'a>) -> Result<DQT<'a>> {
         // The size of the DQT segment tells us how many quantization tables there are.
         // FIXME: does not support 16-bit qtables
         let count = reader.remaining().len() / mem::size_of::<QuantizationTable>();
@@ -124,10 +124,10 @@ impl<'a> JpegParser<'a> {
             );
         }
         let qts = reader.read_objs(count)?;
-        Ok(Dqt(qts))
+        Ok(DQT(qts))
     }
 
-    fn read_dht(&mut self, reader: &mut Reader<'a>) -> Result<Dht<'a>> {
+    fn read_dht(&mut self, reader: &mut Reader<'a>) -> Result<DHT<'a>> {
         const MIN_DHT_LEN: usize = 18; // Tc+Th + 16 length bytes + at least one symbol-length assignment
 
         let mut tables = Vec::new();
@@ -141,16 +141,16 @@ impl<'a> JpegParser<'a> {
             });
         }
 
-        Ok(Dht { tables })
+        Ok(DHT { tables })
     }
 
-    fn read_sof(&mut self, sof: u8, reader: &mut Reader<'a>) -> Result<Sof<'a>> {
+    fn read_sof(&mut self, sof: u8, reader: &mut Reader<'a>) -> Result<SOF<'a>> {
         let P = reader.read_u8()?;
         let Y = reader.read_u16()?;
         let X = reader.read_u16()?;
         let num_components = reader.read_u8()?;
         let components = reader.read_objs::<FrameComponent>(num_components.into())?;
-        Ok(Sof {
+        Ok(SOF {
             sof: SofMarker(sof),
             P,
             Y,
@@ -159,7 +159,7 @@ impl<'a> JpegParser<'a> {
         })
     }
 
-    fn read_sos(&mut self, reader: &mut Reader<'a>) -> Result<Sos<'a>> {
+    fn read_sos(&mut self, reader: &mut Reader<'a>) -> Result<SOS<'a>> {
         let num_components = reader.read_u8()?;
         let components = reader.read_objs(num_components.into())?;
         let Ss = reader.read_u8()?;
@@ -197,7 +197,7 @@ impl<'a> JpegParser<'a> {
 
         let data_end = self.reader.position;
 
-        Ok(Sos {
+        Ok(SOS {
             components,
             Ss,
             Se,
@@ -207,25 +207,25 @@ impl<'a> JpegParser<'a> {
         })
     }
 
-    fn read_dri(&mut self, reader: &mut Reader<'a>) -> Result<Dri<'a>> {
+    fn read_dri(&mut self, reader: &mut Reader<'a>) -> Result<DRI<'a>> {
         let Ri = reader.read_u16()?;
-        Ok(Dri {
+        Ok(DRI {
             Ri,
             _p: PhantomData,
         })
     }
 
-    fn read_com(&mut self, reader: &mut Reader<'a>) -> Result<Com<'a>> {
-        Ok(Com {
+    fn read_com(&mut self, reader: &mut Reader<'a>) -> Result<COM<'a>> {
+        Ok(COM {
             com: reader.read_slice(reader.remaining().len())?,
         })
     }
 
-    fn read_app(&mut self, marker: u8, reader: &mut Reader<'a>) -> Result<App<'a>> {
+    fn read_app(&mut self, marker: u8, reader: &mut Reader<'a>) -> Result<APP<'a>> {
         let n = marker - 0xE0;
 
         let kind = match n {
-            0 => self.read_jfif(reader)?.map(AppKind::Jfif),
+            0 => self.read_jfif(reader)?.map(AppKind::JFIF),
             _ => None,
         };
 
@@ -233,10 +233,10 @@ impl<'a> JpegParser<'a> {
         // arbitrary data we don't always know about.
         reader.position = reader.buf.len() - 1;
 
-        Ok(App { n, kind })
+        Ok(APP { n, kind })
     }
 
-    fn read_jfif(&mut self, reader: &mut Reader<'a>) -> Result<Option<Jfif<'a>>> {
+    fn read_jfif(&mut self, reader: &mut Reader<'a>) -> Result<Option<JFIF<'a>>> {
         const JFIF: &[u8] = b"JFIF\0";
 
         if reader.read_slice(JFIF.len()).ok() != Some(JFIF) {
@@ -259,7 +259,7 @@ impl<'a> JpegParser<'a> {
         let ydensity = reader.read_u16()?;
         let xthumbnail = reader.read_u8()?;
         let ythumbnail = reader.read_u8()?;
-        Ok(Some(Jfif {
+        Ok(Some(JFIF {
             major_version,
             minor_version,
             unit,
@@ -405,12 +405,12 @@ impl<'a> Segment<'a> {
 
 /// An application-specific segment (`APPn`).
 #[derive(Debug)]
-pub struct App<'a> {
+pub struct APP<'a> {
     n: u8,
     kind: Option<AppKind<'a>>,
 }
 
-impl<'a> App<'a> {
+impl<'a> APP<'a> {
     /// Returns the type of APP marker (the `n` in `APPn`).
     ///
     /// This is an integer derived from the marker in the beginning of the APP segment. It is always
@@ -432,14 +432,17 @@ impl<'a> App<'a> {
 }
 
 /// Enumeration of the known `APPn` segments understood by this parser.
+///
+/// Returned by [`APP::as_app_kind`].
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum AppKind<'a> {
-    Jfif(Jfif<'a>),
+    JFIF(JFIF<'a>),
 }
 
+/// A JFIF APP0 header.
 #[derive(Debug)]
-pub struct Jfif<'a> {
+pub struct JFIF<'a> {
     major_version: u8,
     minor_version: u8,
     unit: DensityUnit,
@@ -450,7 +453,7 @@ pub struct Jfif<'a> {
     thumbnail: &'a [u8],
 }
 
-impl<'a> Jfif<'a> {
+impl<'a> JFIF<'a> {
     #[inline]
     pub fn major_version(&self) -> u8 {
         self.major_version
@@ -500,30 +503,51 @@ pub enum DensityUnit {
     DotsPerCm,
 }
 
-pub struct Com<'a> {
+/// A **Com**ment segment containing arbitrary bytes.
+pub struct COM<'a> {
     com: &'a [u8],
 }
 
-impl<'a> fmt::Debug for Com<'a> {
+impl<'a> COM<'a> {
+    #[inline]
+    pub fn content(&self) -> &'a [u8] {
+        self.com
+    }
+}
+
+impl<'a> fmt::Debug for COM<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Com(\"{}\")", self.com.escape_ascii())
     }
 }
 
 /// Enumeration of segment kinds understood by this parser.
-#[derive(Debug)]
 #[non_exhaustive]
 pub enum SegmentKind<'a> {
-    Dqt(Dqt<'a>),
-    Dht(Dht<'a>),
-    Dri(Dri<'a>),
-    Sof(Sof<'a>),
-    Sos(Sos<'a>),
-    App(App<'a>),
-    Com(Com<'a>),
+    DQT(DQT<'a>),
+    DHT(DHT<'a>),
+    DRI(DRI<'a>),
+    SOF(SOF<'a>),
+    SOS(SOS<'a>),
+    APP(APP<'a>),
+    COM(COM<'a>),
 }
 
-#[derive(Copy, Clone, AnyBitPattern)]
+impl<'a> fmt::Debug for SegmentKind<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DQT(s) => s.fmt(f),
+            Self::DHT(s) => s.fmt(f),
+            Self::DRI(s) => s.fmt(f),
+            Self::SOF(s) => s.fmt(f),
+            Self::SOS(s) => s.fmt(f),
+            Self::APP(s) => s.fmt(f),
+            Self::COM(s) => s.fmt(f),
+        }
+    }
+}
+
+#[derive(Copy, Clone, AnyBitPattern)] // TODO: public dep
 #[repr(C)]
 pub struct QuantizationTable {
     PqTq: u8,
@@ -567,9 +591,9 @@ impl fmt::Debug for QuantizationTable {
 
 /// **D**efine **Q**uantization **T**ables – sets one or more [`QuantizationTable`]s.
 #[derive(Debug)]
-pub struct Dqt<'a>(&'a [QuantizationTable]);
+pub struct DQT<'a>(&'a [QuantizationTable]);
 
-impl<'a> Dqt<'a> {
+impl<'a> DQT<'a> {
     #[inline]
     pub fn tables(&self) -> impl Iterator<Item = &QuantizationTable> {
         self.0.iter()
@@ -631,13 +655,13 @@ impl<'a> fmt::Debug for HuffmanTable<'a> {
     }
 }
 
-/// **DHT** Define Huffman Tables – defines one or more [`HuffmanTable`]s.
+/// **D**efine **H**uffman **T**ables – defines one or more [`HuffmanTable`]s.
 #[derive(Debug)]
-pub struct Dht<'a> {
+pub struct DHT<'a> {
     tables: Vec<HuffmanTable<'a>>,
 }
 
-impl<'a> Dht<'a> {
+impl<'a> DHT<'a> {
     pub fn tables(&self) -> impl Iterator<Item = &HuffmanTable<'a>> {
         self.tables.iter()
     }
@@ -653,12 +677,12 @@ impl<'a> Dht<'a> {
 /// image more robust against data corruption, by preventing corruption from affecting more than the
 /// restart interval it occurs in.
 #[derive(Clone, Copy)]
-pub struct Dri<'a> {
+pub struct DRI<'a> {
     Ri: u16,
     _p: PhantomData<&'a ()>,
 }
 
-impl<'a> Dri<'a> {
+impl<'a> DRI<'a> {
     /// Returns the number of MCUs contained in each restart interval.
     #[inline]
     pub fn Ri(&self) -> u16 {
@@ -666,15 +690,15 @@ impl<'a> Dri<'a> {
     }
 }
 
-impl<'a> fmt::Debug for Dri<'a> {
+impl<'a> fmt::Debug for DRI<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Dri").field("Ri", &self.Ri).finish()
+        f.debug_struct("DRI").field("Ri", &self.Ri).finish()
     }
 }
 
 /// **SOF** Start Of Frame
 #[derive(Debug)]
-pub struct Sof<'a> {
+pub struct SOF<'a> {
     /// The SOF marker.
     sof: SofMarker,
     /// Sample precision in bits.
@@ -684,7 +708,7 @@ pub struct Sof<'a> {
     components: &'a [FrameComponent],
 }
 
-impl<'a> Sof<'a> {
+impl<'a> SOF<'a> {
     #[inline]
     pub fn sof(&self) -> SofMarker {
         self.sof
@@ -827,7 +851,7 @@ impl fmt::Debug for FrameComponent {
 }
 
 /// **SOS** Start Of Scan – a scan header, followed by entropy-coded scan data.
-pub struct Sos<'a> {
+pub struct SOS<'a> {
     components: &'a [ScanComponent],
     Ss: u8,
     Se: u8,
@@ -836,7 +860,7 @@ pub struct Sos<'a> {
     data: &'a [u8],
 }
 
-impl<'a> Sos<'a> {
+impl<'a> SOS<'a> {
     #[inline]
     pub fn components(&self) -> &[ScanComponent] {
         self.components
@@ -875,9 +899,9 @@ impl<'a> Sos<'a> {
     }
 }
 
-impl<'a> fmt::Debug for Sos<'a> {
+impl<'a> fmt::Debug for SOS<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Sos")
+        f.debug_struct("SOS")
             .field("components", &self.components)
             .field("Ss", &self.Ss)
             .field("Se", &self.Se)

@@ -450,7 +450,7 @@ impl<'a> ImageData<'a> {
                 continue;
             };
             match kind {
-                SegmentKind::Sof(sof) => {
+                SegmentKind::SOF(sof) => {
                     if sof.sof() != SofMarker::SOF0 {
                         bail!("not a baseline JPEG (SOF={:?})", sof.sof());
                     }
@@ -501,7 +501,7 @@ impl<'a> ImageData<'a> {
 
                     size = Some((sof.X(), sof.Y()));
                 }
-                SegmentKind::Dqt(dqt) => {
+                SegmentKind::DQT(dqt) => {
                     for table in dqt.tables() {
                         if table.Pq() != 0 {
                             bail!(
@@ -525,7 +525,7 @@ impl<'a> ImageData<'a> {
                         }
                     }
                 }
-                SegmentKind::Dht(dht) => {
+                SegmentKind::DHT(dht) => {
                     for table in dht.tables() {
                         let index = table.Th();
                         if index > 1 {
@@ -545,11 +545,11 @@ impl<'a> ImageData<'a> {
                         huffman_tables[usize::from(index)] = data;
                     }
                 }
-                SegmentKind::Dri(dri) => {
+                SegmentKind::DRI(dri) => {
                     // FIXME: add some checks here, we probably should have a maximum Ri value?
                     ri = Some(dri.Ri() as u32);
                 }
-                SegmentKind::Sos(sos) => {
+                SegmentKind::SOS(sos) => {
                     if sos.Ss() != 0 || sos.Se() != 63 || sos.Ah() != 0 || sos.Al() != 0 {
                         bail!("non-baseline scan header");
                     }

@@ -1,30 +1,30 @@
-0002 [FF E0] App(App { n: 0, kind: Some(Jfif(Jfif { major_version: 1, minor_version: 1, unit: DotsPerInch, xdensity: 300, ydensity: 300, xthumbnail: 0, ythumbnail: 0, thumbnail: [] })) })
-0014 [FF DB] Dqt(Dqt([QuantizationTable { Pq: 0, Tq: 0, Qk: [3, 2, 2, 3, 2, 2, 3, 3, 3, 3, 4, 3, 3, 4, 5, 8, 5, 5, 4, 4, 5, 10, 7, 7, 6, 8, 12, 10, 12, 12, 11, 10, 11, 11, 13, 14, 18, 16, 13, 14, 17, 14, 11, 11, 16, 22, 16, 17, 19, 20, 21, 21, 21, 12, 15, 23, 24, 22, 20, 24, 18, 20, 21, 20] }]))
-0059 [FF DB] Dqt(Dqt([QuantizationTable { Pq: 0, Tq: 1, Qk: [3, 4, 4, 5, 4, 5, 9, 5, 5, 9, 20, 13, 11, 13, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20] }]))
-009E [FF C2] Sof(Sof { sof: SOF2, P: 8, Y: 16, X: 64, components: [FrameComponent { Ci: 1, Hi: 2, Vi: 2, Tqi: 0 }, FrameComponent { Ci: 2, Hi: 1, Vi: 1, Tqi: 1 }, FrameComponent { Ci: 3, Hi: 1, Vi: 1, Tqi: 1 }] })
-00B1 [FF C4] Dht(Dht { tables: [HuffmanTable { Tc: 0, Th: 0, Li: [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [0, 8] }] })
-00C8 [FF C4] Dht(Dht { tables: [HuffmanTable { Tc: 0, Th: 1, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [0] }] })
-00DE [FF DD] Dri(Dri { Ri: 4 })
-00E4 [FF DA] Sos(Sos { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }, ScanComponent { Csj: 2, Tdj: 1, Taj: 0 }, ScanComponent { Csj: 3, Tdj: 1, Taj: 0 }], Ss: 0, Se: 0, Ah: 0, Al: 1, data: [149, 192, 0, 0, 127] })
-00F7 [FF C4] Dht(Dht { tables: [HuffmanTable { Tc: 1, Th: 0, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [48] }] })
-010D [FF DD] Dri(Dri { Ri: 8 })
-0113 [FF DA] Sos(Sos { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }], Ss: 1, Se: 5, Ah: 0, Al: 2, data: [15, 255, 208, 15] })
-0121 [FF C4] Dht(Dht { tables: [HuffmanTable { Tc: 1, Th: 1, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [32] }] })
-0137 [FF DD] Dri(Dri { Ri: 4 })
-013D [FF DA] Sos(Sos { components: [ScanComponent { Csj: 3, Tdj: 0, Taj: 1 }], Ss: 1, Se: 63, Ah: 0, Al: 1, data: [31] })
-0148 [FF C4] Dht(Dht { tables: [HuffmanTable { Tc: 1, Th: 1, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [32] }] })
-015E [FF DA] Sos(Sos { components: [ScanComponent { Csj: 2, Tdj: 0, Taj: 1 }], Ss: 1, Se: 63, Ah: 0, Al: 1, data: [31] })
-0169 [FF C4] Dht(Dht { tables: [HuffmanTable { Tc: 1, Th: 0, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [48] }] })
-017F [FF DD] Dri(Dri { Ri: 8 })
-0185 [FF DA] Sos(Sos { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }], Ss: 6, Se: 63, Ah: 0, Al: 2, data: [15, 255, 208, 15] })
-0193 [FF C4] Dht(Dht { tables: [HuffmanTable { Tc: 1, Th: 0, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [48] }] })
-01A9 [FF DA] Sos(Sos { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }], Ss: 1, Se: 63, Ah: 2, Al: 1, data: [15, 255, 208, 15] })
-01B7 [FF DD] Dri(Dri { Ri: 4 })
-01BD [FF DA] Sos(Sos { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }, ScanComponent { Csj: 2, Tdj: 0, Taj: 0 }, ScanComponent { Csj: 3, Tdj: 0, Taj: 0 }], Ss: 0, Se: 0, Ah: 1, Al: 0, data: [0, 0, 0] })
-01CE [FF C4] Dht(Dht { tables: [HuffmanTable { Tc: 1, Th: 1, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [32] }] })
-01E4 [FF DA] Sos(Sos { components: [ScanComponent { Csj: 3, Tdj: 0, Taj: 1 }], Ss: 1, Se: 63, Ah: 1, Al: 0, data: [31] })
-01EF [FF C4] Dht(Dht { tables: [HuffmanTable { Tc: 1, Th: 1, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [32] }] })
-0205 [FF DA] Sos(Sos { components: [ScanComponent { Csj: 2, Tdj: 0, Taj: 1 }], Ss: 1, Se: 63, Ah: 1, Al: 0, data: [31] })
-0210 [FF C4] Dht(Dht { tables: [HuffmanTable { Tc: 1, Th: 0, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [48] }] })
-0226 [FF DD] Dri(Dri { Ri: 8 })
-022C [FF DA] Sos(Sos { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }], Ss: 1, Se: 63, Ah: 1, Al: 0, data: [15, 255, 208, 15] })
+0002 [FF E0] APP { n: 0, kind: Some(JFIF(JFIF { major_version: 1, minor_version: 1, unit: DotsPerInch, xdensity: 300, ydensity: 300, xthumbnail: 0, ythumbnail: 0, thumbnail: [] })) }
+0014 [FF DB] DQT([QuantizationTable { Pq: 0, Tq: 0, Qk: [3, 2, 2, 3, 2, 2, 3, 3, 3, 3, 4, 3, 3, 4, 5, 8, 5, 5, 4, 4, 5, 10, 7, 7, 6, 8, 12, 10, 12, 12, 11, 10, 11, 11, 13, 14, 18, 16, 13, 14, 17, 14, 11, 11, 16, 22, 16, 17, 19, 20, 21, 21, 21, 12, 15, 23, 24, 22, 20, 24, 18, 20, 21, 20] }])
+0059 [FF DB] DQT([QuantizationTable { Pq: 0, Tq: 1, Qk: [3, 4, 4, 5, 4, 5, 9, 5, 5, 9, 20, 13, 11, 13, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20] }])
+009E [FF C2] SOF { sof: SOF2, P: 8, Y: 16, X: 64, components: [FrameComponent { Ci: 1, Hi: 2, Vi: 2, Tqi: 0 }, FrameComponent { Ci: 2, Hi: 1, Vi: 1, Tqi: 1 }, FrameComponent { Ci: 3, Hi: 1, Vi: 1, Tqi: 1 }] }
+00B1 [FF C4] DHT { tables: [HuffmanTable { Tc: 0, Th: 0, Li: [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [0, 8] }] }
+00C8 [FF C4] DHT { tables: [HuffmanTable { Tc: 0, Th: 1, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [0] }] }
+00DE [FF DD] DRI { Ri: 4 }
+00E4 [FF DA] SOS { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }, ScanComponent { Csj: 2, Tdj: 1, Taj: 0 }, ScanComponent { Csj: 3, Tdj: 1, Taj: 0 }], Ss: 0, Se: 0, Ah: 0, Al: 1, data: [149, 192, 0, 0, 127] }
+00F7 [FF C4] DHT { tables: [HuffmanTable { Tc: 1, Th: 0, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [48] }] }
+010D [FF DD] DRI { Ri: 8 }
+0113 [FF DA] SOS { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }], Ss: 1, Se: 5, Ah: 0, Al: 2, data: [15, 255, 208, 15] }
+0121 [FF C4] DHT { tables: [HuffmanTable { Tc: 1, Th: 1, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [32] }] }
+0137 [FF DD] DRI { Ri: 4 }
+013D [FF DA] SOS { components: [ScanComponent { Csj: 3, Tdj: 0, Taj: 1 }], Ss: 1, Se: 63, Ah: 0, Al: 1, data: [31] }
+0148 [FF C4] DHT { tables: [HuffmanTable { Tc: 1, Th: 1, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [32] }] }
+015E [FF DA] SOS { components: [ScanComponent { Csj: 2, Tdj: 0, Taj: 1 }], Ss: 1, Se: 63, Ah: 0, Al: 1, data: [31] }
+0169 [FF C4] DHT { tables: [HuffmanTable { Tc: 1, Th: 0, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [48] }] }
+017F [FF DD] DRI { Ri: 8 }
+0185 [FF DA] SOS { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }], Ss: 6, Se: 63, Ah: 0, Al: 2, data: [15, 255, 208, 15] }
+0193 [FF C4] DHT { tables: [HuffmanTable { Tc: 1, Th: 0, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [48] }] }
+01A9 [FF DA] SOS { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }], Ss: 1, Se: 63, Ah: 2, Al: 1, data: [15, 255, 208, 15] }
+01B7 [FF DD] DRI { Ri: 4 }
+01BD [FF DA] SOS { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }, ScanComponent { Csj: 2, Tdj: 0, Taj: 0 }, ScanComponent { Csj: 3, Tdj: 0, Taj: 0 }], Ss: 0, Se: 0, Ah: 1, Al: 0, data: [0, 0, 0] }
+01CE [FF C4] DHT { tables: [HuffmanTable { Tc: 1, Th: 1, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [32] }] }
+01E4 [FF DA] SOS { components: [ScanComponent { Csj: 3, Tdj: 0, Taj: 1 }], Ss: 1, Se: 63, Ah: 1, Al: 0, data: [31] }
+01EF [FF C4] DHT { tables: [HuffmanTable { Tc: 1, Th: 1, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [32] }] }
+0205 [FF DA] SOS { components: [ScanComponent { Csj: 2, Tdj: 0, Taj: 1 }], Ss: 1, Se: 63, Ah: 1, Al: 0, data: [31] }
+0210 [FF C4] DHT { tables: [HuffmanTable { Tc: 1, Th: 0, Li: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Vij: [48] }] }
+0226 [FF DD] DRI { Ri: 8 }
+022C [FF DA] SOS { components: [ScanComponent { Csj: 1, Tdj: 0, Taj: 0 }], Ss: 1, Se: 63, Ah: 1, Al: 0, data: [15, 255, 208, 15] }
