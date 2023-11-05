@@ -25,6 +25,22 @@ const SCALE = array(
     1.0, 0.785694958, 0.541196100, 0.275899379,
 );
 
+const ZIGZAG = array(
+     0,  1,  5,  6, 14, 15, 27, 28,
+     2,  4,  7, 13, 16, 26, 29, 42,
+     3,  8, 12, 17, 25, 30, 41, 43,
+     9, 11, 18, 24, 31, 40, 44, 53,
+    10, 19, 23, 32, 39, 45, 52, 54,
+    20, 22, 33, 38, 46, 51, 55, 60,
+    21, 34, 37, 47, 50, 56, 59, 61,
+    35, 36, 48, 49, 57, 58, 62, 63,
+);
+
+fn zigzag(pos: u32) -> u32 {
+    var zigzag = ZIGZAG;
+    return u32(zigzag[pos]);
+}
+
 // DCT entry point. Each workgroup will decode `DCTS_PER_WORKGROUP` DUs.
 @compute
 @workgroup_size(DCT_WORKGROUP_SIZE)
@@ -60,7 +76,8 @@ fn dct(
     let col_scale = scale[col];
     for (var row = 0u; row < DCT_SIZE; row++) {
         let mul = scale[row] * col_scale;
-        inputs[row] = f32(coefficients[global_offset + row * DCT_SIZE + col]) * mul;
+        let i = zigzag(row * DCT_SIZE + col);
+        inputs[row] = f32(coefficients[global_offset + i]) * mul;
     }
 
     // Now use the inputs for this column to compute its IDCT, writing the result to `ws`.

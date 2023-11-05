@@ -191,8 +191,7 @@ fn huffman(
                         consume(ssss);
 
                         let coeff = huff_extend(val, ssss);
-                        let i = unzigzag(pos);
-                        coefficients[start_offset + i] = coeff * dequant(qtable, i);
+                        coefficients[start_offset + pos] = coeff * dequant(qtable, pos);
                     }
 
                     du_index++;
@@ -212,20 +211,4 @@ fn dequant(qtable: u32, index: u32) -> i32 {
 fn huff_extend(v: i32, t: u32) -> i32 {
     let vt = 1 << (t - 1u);
     return select(v, v + (-1 << t) + 1, v < vt);
-}
-
-const UNZIGZAG = array(
-     0,  1,  8, 16,  9,  2,  3, 10,
-    17, 24, 32, 25, 18, 11,  4,  5,
-    12, 19, 26, 33, 40, 48, 41, 34,
-    27, 20, 13,  6,  7, 14, 21, 28,
-    35, 42, 49, 56, 57, 50, 43, 36,
-    29, 22, 15, 23, 30, 37, 44, 51,
-    58, 59, 52, 45, 38, 31, 39, 46,
-    53, 60, 61, 54, 47, 55, 62, 63,
-);
-
-fn unzigzag(pos: u32) -> u32 {
-    var unzigzag = UNZIGZAG;
-    return u32(unzigzag[pos]);
 }
