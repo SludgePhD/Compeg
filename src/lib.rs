@@ -43,7 +43,13 @@ use crate::{
 pub use scan::ScanBuffer;
 
 const OUTPUT_FORMAT: TextureFormat = TextureFormat::Rgba8Uint;
-const WORKGROUP_SIZE: u32 = 64;
+
+const HUFFMAN_WORKGROUP_SIZE: u32 = 64;
+const DCT_WORKGROUP_SIZE: u32 = 256;
+const FINALIZE_WORKGROUP_SIZE: u32 = 64;
+
+const THREADS_PER_DCT: u32 = 8;
+const DCTS_PER_WORKGROUP: u32 = DCT_WORKGROUP_SIZE / THREADS_PER_DCT;
 
 /// An open handle to a GPU.
 ///
@@ -271,7 +277,7 @@ impl Decoder {
     /// [`wgpu`] only guarantees that it is able to dispatch 65535 workgroups at once, so this is
     /// the maximum number of shader invocations we can run (and thus the max. number of restart
     /// intervals we can process).
-    const MAX_RESTART_INTERVALS: u32 = WORKGROUP_SIZE * 65535;
+    const MAX_RESTART_INTERVALS: u32 = HUFFMAN_WORKGROUP_SIZE * 65535;
     // FIXME: fix this to use MCUs/DUs as the limiting factor?
 
     /// Creates a new JPEG decoding context on the given [`Gpu`].
@@ -389,9 +395,11 @@ impl Decoder {
         enc.clear_buffer(self.coefficients.buffer(), 0, None);
 
         let mut compute = enc.begin_compute_pass(&ComputePassDescriptor::default());
-        let huffman_workgroups = (total_restart_intervals + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-        let dct_workgroups = (total_dus + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-        let finalize_workgroups = (total_mcus + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let huffman_workgroups =
+            (total_restart_intervals + HUFFMAN_WORKGROUP_SIZE - 1) / HUFFMAN_WORKGROUP_SIZE;
+        let dct_workgroups = (total_dus + DCTS_PER_WORKGROUP - 1) / DCTS_PER_WORKGROUP;
+        let finalize_workgroups =
+            (total_mcus + FINALIZE_WORKGROUP_SIZE - 1) / FINALIZE_WORKGROUP_SIZE;
 
         compute.set_bind_group(0, metadata_bg, &[]);
         compute.set_bind_group(1, huffman_bg, &[]);
@@ -412,14 +420,15 @@ impl Decoder {
         log::trace!(
             "dispatching {} workgroups for huffman decoding ({} shader invocations; {} restart intervals)",
             huffman_workgroups,
-            huffman_workgroups * WORKGROUP_SIZE,
+            huffman_workgroups * HUFFMAN_WORKGROUP_SIZE,
             total_restart_intervals,
         );
         log::trace!(
-            "dispatching {} workgroups for IDCT ({} shader invocations; {} MCUs)",
-            huffman_workgroups,
-            huffman_workgroups * WORKGROUP_SIZE,
-            total_restart_intervals,
+            "dispatching {} workgroups for IDCT ({} shader invocations; {} MCUs; {} DUs)",
+            dct_workgroups,
+            dct_workgroups * DCT_WORKGROUP_SIZE,
+            total_mcus,
+            total_dus,
         );
 
         let buffer = enc.finish();
