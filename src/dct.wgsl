@@ -19,6 +19,7 @@ const WORKGROUP_BUF_LEN = 64u * DCTS_PER_WORKGROUP;
 var<workgroup> ws: array<f32, WORKGROUP_BUF_LEN>;
 // 4 * 64 * DCTS_PER_WORKGROUP bytes.
 // So for 64-wide workgroups this uses 2 KiB.
+// For our 256-wide workgroups it uses 8 KiB.
 
 const SCALE = array(
     1.0, 1.387039845, 1.306562965, 1.175875602,
@@ -199,13 +200,75 @@ fn dct(
     coefficients[global_offset + y * 2u + 1u] = i32(rowdata[1]);
 }
 
+/////////////////
+// Compositing //
+/////////////////
+
+// After each DU has been decoded by the IDCT shader above, they all need to be read from the buffer
+// and written to the final texture after conversion to RGB.
+// The naive way of doing this has extremely poor performance (presumably because of all the VRAM
+// accesses), so we read all the DUs that contribute to an MCU into fast workgroup-local memory and
+// operate on that.
+
+// FIXME: make these `override`s once naga supports those.
+const DUS_PER_MCU = 4u;
+const MCU_HEIGHT = 8u;
+const MCU_WIDTH = 16u;
+
+struct DuBuf {
+    // data units are stored in the same format as they are in the big buffer: with 8 pixel rows
+    // packed into `vec2<u32>`.
+    rows: array<vec2<u32>, 8>,
+}
+// 8 * 8 = 64 Bytes per DU
+
+// Holds the decoded data units belonging to one MCU.
+struct McuBuf {
+    du: array<DuBuf, DUS_PER_MCU>,
+}
+// 64 * DUS_PER_MCU bytes per MCU
+// (256 Bytes for 4 DUs/MCU)
+
+// We choose the number of MCUs processed per workgroup so that we end up at a "reasonable" amount
+// of LDS usage, like 16 KB (GCN has 32K). This ends up at 64 MCUs per workgroup.
+
+// Each thread composites one MCU row.
+const THREADS_PER_MCU = MCU_HEIGHT;
+
+// In the lowest-end implementations, WebGPU workgroups can only be 256 threads in size.
+const WORKGROUP_SIZE = 256u;
+
+const MCUS_PER_WORKGROUP = WORKGROUP_SIZE / THREADS_PER_MCU;
+
+var<workgroup> databuf: array<McuBuf, MCUS_PER_WORKGROUP>;
+
 @compute
-@workgroup_size(64)
+@workgroup_size(WORKGROUP_SIZE)
 fn finalize(
-    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(workgroup_id) wgid: vec3<u32>,
+    @builtin(local_invocation_index) local: u32,
 ) {
-    let mcu_idx = id.x;
-    let first_du = mcu_idx * metadata.dus_per_mcu;
+    let mcu_idx = wgid.x * MCUS_PER_WORKGROUP + local / THREADS_PER_MCU;
+    let row = local % THREADS_PER_MCU;
+
+    if (mcu_idx >= metadata.start_position_count * metadata.restart_interval) {
+        return;
+    }
+
+    let global_du = mcu_idx * metadata.dus_per_mcu;
+    let local_mcu = local / THREADS_PER_MCU;  // MCU in this workgroup
+
+    // Each thread composites one row of an MCU, and is responsible for loading one row of each DU.
+    for (var i = 0u; i < metadata.dus_per_mcu; i++) {
+        let du_offset = (global_du + i) * 64u;
+        let data = vec2(
+            u32(coefficients[du_offset + row * 2u + 0u]),
+            u32(coefficients[du_offset + row * 2u + 1u]),
+        );
+        databuf[local_mcu].du[i].rows[row] = data;
+    }
+
+    workgroupBarrier();
 
     let mcu_coord = vec2(
         mcu_idx % metadata.width_mcus,
@@ -218,38 +281,23 @@ fn finalize(
     );
 
     let top_left = mcu_coord * mcu_size;
+    for (var mcu_x = 0u; mcu_x < mcu_size.x; mcu_x++) {
+        let coord = top_left + vec2(mcu_x, row);
 
-    for (var yblock = 0u; yblock < metadata.max_vsample; yblock++) {
-        for (var xblock = 0u; xblock < metadata.max_hsample; xblock++) {
-            for (var ypix = 0u; ypix < 8u; ypix++) {
-                // Load the 8-pixel rows of each DU for this Y coordinate.
-                let luma_row = read_du(first_du + xblock, ypix);
-                let cb_row = read_du(first_du + 2u, ypix);
-                let cr_row = read_du(first_du + 3u, ypix);
+        let luma_du = mcu_x / 8u;
+        let cb_du = 2u;
+        let cr_du = 3u;
 
-                for (var x = 0u; x < 8u; x++) {
-                    let coord = vec2(xblock * 8u + x, yblock * 8u + ypix);
+        let du_x = mcu_x & 7u;
+        let word_x = u32(du_x > 3u);
+        let shift = (du_x & 7u) * 8u;
+        var luma = databuf[local_mcu].du[luma_du].rows[row][word_x] >> shift;
+        var cb = databuf[local_mcu].du[cb_du].rows[row][word_x] >> shift;
+        var cr = databuf[local_mcu].du[cr_du].rows[row][word_x] >> shift;
 
-                    // FIXME: the computation is hardcoded to my specific JPEGs, it should be made more flexible
-
-                    let word = u32(x > 3u);
-                    let cb = (cb_row[word] >> ((x & 3u) * 8u)) & 0xffu;
-                    let cr = (cr_row[word] >> ((x & 3u) * 8u)) & 0xffu;
-                    let luma = (luma_row[word] >> ((x & 3u) * 8u)) & 0xffu;
-
-                    let rgb = ycbcr2rgb(luma, cb, cr);
-                    textureStore(out, top_left + coord, vec4(rgb, 0xffu));
-                }
-            }
-        }
+        let rgb = ycbcr2rgb(luma & 0xffu, cb & 0xffu, cr & 0xffu);
+        textureStore(out, coord, vec4(rgb, 0xffu));
     }
-}
-
-fn read_du(du: u32, y: u32) -> vec2<u32> {
-    return vec2(
-        u32(coefficients[du * 64u + y * 2u + 0u]),
-        u32(coefficients[du * 64u + y * 2u + 1u]),
-    );
 }
 
 fn ycbcr2rgb(y_: u32, cb_: u32, cr_: u32) -> vec3<u32> {

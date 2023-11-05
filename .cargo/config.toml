@@ -1,0 +1,6 @@
+# On Linux, use mold as the linker. This cuts link times down drastically.
+[target.'cfg(target_os = "linux")']
+rustflags = [
+    "-Clinker=clang",
+    "-Clink-arg=-fuse-ld=mold",
+]

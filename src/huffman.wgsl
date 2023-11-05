@@ -176,7 +176,7 @@ fn huffman(
 
                         let rrrrssss = huffdecode(achufftable); // 16
                         if rrrrssss == 0u {
-                            // Remaining ones are all 0.
+                            // EOB = Remaining ones are all 0.
                             break;
                         }
                         if rrrrssss == 0xf0u {

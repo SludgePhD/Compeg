@@ -45,11 +45,15 @@ pub use scan::ScanBuffer;
 const OUTPUT_FORMAT: TextureFormat = TextureFormat::Rgba8Uint;
 
 const HUFFMAN_WORKGROUP_SIZE: u32 = 64;
-const DCT_WORKGROUP_SIZE: u32 = 256;
-const FINALIZE_WORKGROUP_SIZE: u32 = 64;
 
+const DCT_WORKGROUP_SIZE: u32 = 256;
 const THREADS_PER_DCT: u32 = 8;
 const DCTS_PER_WORKGROUP: u32 = DCT_WORKGROUP_SIZE / THREADS_PER_DCT;
+
+const FINALIZE_WORKGROUP_SIZE: u32 = 256;
+const MCU_HEIGHT: u32 = 8;
+const THREADS_PER_MCU: u32 = MCU_HEIGHT;
+const MCUS_PER_WORKGROUP: u32 = FINALIZE_WORKGROUP_SIZE / THREADS_PER_MCU;
 
 /// An open handle to a GPU.
 ///
@@ -398,8 +402,7 @@ impl Decoder {
         let huffman_workgroups =
             (total_restart_intervals + HUFFMAN_WORKGROUP_SIZE - 1) / HUFFMAN_WORKGROUP_SIZE;
         let dct_workgroups = (total_dus + DCTS_PER_WORKGROUP - 1) / DCTS_PER_WORKGROUP;
-        let finalize_workgroups =
-            (total_mcus + FINALIZE_WORKGROUP_SIZE - 1) / FINALIZE_WORKGROUP_SIZE;
+        let finalize_workgroups = (total_mcus + MCUS_PER_WORKGROUP - 1) / MCUS_PER_WORKGROUP;
 
         compute.set_bind_group(0, metadata_bg, &[]);
         compute.set_bind_group(1, huffman_bg, &[]);
