@@ -57,6 +57,7 @@ pub struct Gpu {
     output_bgl: Arc<BindGroupLayout>,
     huffman_decode_pipeline: ComputePipeline,
     dct_pipeline: ComputePipeline,
+    finalize_pipeline: ComputePipeline,
 }
 
 impl Gpu {
@@ -220,6 +221,16 @@ impl Gpu {
             module: &dct,
             entry_point: "dct",
         });
+        let finalize_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("finalize_pipeline"),
+            layout: Some(&device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[&metadata_bgl, &coefficients_bgl, &output_bgl],
+                push_constant_ranges: &[],
+            })),
+            module: &dct,
+            entry_point: "finalize",
+        });
 
         Ok(Self {
             device,
@@ -230,6 +241,7 @@ impl Gpu {
             output_bgl: Arc::new(output_bgl),
             huffman_decode_pipeline,
             dct_pipeline,
+            finalize_pipeline,
         })
     }
 }
@@ -260,6 +272,7 @@ impl Decoder {
     /// the maximum number of shader invocations we can run (and thus the max. number of restart
     /// intervals we can process).
     const MAX_RESTART_INTERVALS: u32 = WORKGROUP_SIZE * 65535;
+    // FIXME: fix this to use MCUs/DUs as the limiting factor?
 
     /// Creates a new JPEG decoding context on the given [`Gpu`].
     pub fn new(gpu: Arc<Gpu>) -> Self {
@@ -332,7 +345,7 @@ impl Decoder {
 
         let total_restart_intervals = data.metadata.total_restart_intervals;
         let total_mcus = total_restart_intervals * data.metadata.restart_interval;
-        let total_dus = u64::from(total_mcus) * u64::from(data.metadata.dus_per_mcu);
+        let total_dus = total_mcus * data.metadata.dus_per_mcu;
         let t_preprocess = time(|| {
             self.scan_buffer
                 .process(data.scan_data(), total_restart_intervals)
@@ -352,7 +365,7 @@ impl Decoder {
             self.huffman_l2.write(data.huffman_tables.l2_data());
 
             // Reserve space for the decoded coefficients. There are 64 32-bit values per data unit.
-            self.coefficients.reserve(4 * 64 * total_dus);
+            self.coefficients.reserve(4 * 64 * u64::from(total_dus));
         });
 
         let metadata_bg = self
@@ -377,7 +390,8 @@ impl Decoder {
 
         let mut compute = enc.begin_compute_pass(&ComputePassDescriptor::default());
         let huffman_workgroups = (total_restart_intervals + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-        let dct_workgroups = (total_mcus + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let dct_workgroups = (total_dus + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let finalize_workgroups = (total_mcus + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
 
         compute.set_bind_group(0, metadata_bg, &[]);
         compute.set_bind_group(1, huffman_bg, &[]);
@@ -390,6 +404,8 @@ impl Decoder {
         compute.set_bind_group(2, output_bg, &[]);
         compute.set_pipeline(&self.gpu.dct_pipeline);
         compute.dispatch_workgroups(dct_workgroups, 1, 1);
+        compute.set_pipeline(&self.gpu.finalize_pipeline);
+        compute.dispatch_workgroups(finalize_workgroups, 1, 1);
 
         drop(compute);
 

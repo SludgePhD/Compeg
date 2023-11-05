@@ -5,72 +5,52 @@
 @group(2) @binding(0) var out: texture_storage_2d<rgba8uint, write>;
 
 
-// DCT entry point. Each invocation will decode 1 MCU (not 1 restart interval like the huffman
+// DCT entry point. Each invocation will decode 1 DU (not 1 restart interval like the huffman
 // shader does).
 @compute
 @workgroup_size(64)
 fn dct(
     @builtin(global_invocation_id) id: vec3<u32>,
 ) {
-    if (id.x >= metadata.start_position_count * metadata.restart_interval) {
+    if (id.x >= metadata.start_position_count * metadata.restart_interval * metadata.dus_per_mcu) {
         return;
     }
 
-    let global_du = id.x * metadata.dus_per_mcu;
-    var du_index = 0u;
+    let start_offset = id.x * 64u;
 
-    for (var comp = 0u; comp < 3u; comp++) {
-        for (var v_samp = 0u; v_samp < metadata.components[comp].vsample; v_samp++) {
-            for (var h_samp = 0u; h_samp < metadata.components[comp].hsample; h_samp++) {
-                let start_offset = (global_du + du_index) * 64u;
-
-                var coeff = array<i32, 64>();
-                for (var i = 0u; i < 64u; i++) {
-                    coeff[i] = coefficients[start_offset + i];
-                }
-
-                let decoded = idct(coeff);
-
-                mcu_buffer_store_data_unit(du_index, decoded);
-
-                du_index++;
-            }
-        }
+    var data = array<i32, 64>();
+    for (var i = 0u; i < 64u; i++) {
+        data[i] = coefficients[start_offset + i];
     }
 
-    mcu_buffer_flush(id.x);
-}
+    data = idct(data);
 
-struct DataUnitBuf {
-    // 8 rows of 8 8-bit pixels, compressed into a `vec2<u32>`
-    pixels: array<vec2<u32>, 8>, // 64 bytes
-}
-
-// 2x1 data units, enough for 2x1 subsampling
-// This is *very* hard-coded for my specific JPEGs, because making it larger immediately impacts
-// performance. Once naga supports `override` it can be chosen dynamically.
-var<private> mcu_buffer: array<DataUnitBuf, 4>;
-// 64 * 4 bytes = 256 bytes per invocation
-
-fn mcu_buffer_store_data_unit(du_index: u32, values_: array<i32, 64>) {
-    var values = values_;
+    // Write the 8x8 8-bit pixels back to the `coefficients` buffer.
     for (var y = 0u; y < 8u; y++) {
         let row = vec2(
-            u32(values[y * 8u + 0u]) << 0u |
-            u32(values[y * 8u + 1u]) << 8u |
-            u32(values[y * 8u + 2u]) << 16u |
-            u32(values[y * 8u + 3u]) << 24u,
-            u32(values[y * 8u + 4u]) << 0u |
-            u32(values[y * 8u + 5u]) << 8u |
-            u32(values[y * 8u + 6u]) << 16u |
-            u32(values[y * 8u + 7u]) << 24u,
+            u32(data[y * 8u + 0u]) << 0u |
+            u32(data[y * 8u + 1u]) << 8u |
+            u32(data[y * 8u + 2u]) << 16u |
+            u32(data[y * 8u + 3u]) << 24u,
+            u32(data[y * 8u + 4u]) << 0u |
+            u32(data[y * 8u + 5u]) << 8u |
+            u32(data[y * 8u + 6u]) << 16u |
+            u32(data[y * 8u + 7u]) << 24u,
         );
 
-        mcu_buffer[du_index].pixels[y] = row;
+        coefficients[start_offset + y * 2u + 0u] = i32(row[0]);
+        coefficients[start_offset + y * 2u + 1u] = i32(row[1]);
     }
 }
 
-fn mcu_buffer_flush(mcu_idx: u32) {
+@compute
+@workgroup_size(64)
+fn finalize(
+    @builtin(global_invocation_id) id: vec3<u32>,
+) {
+    let mcu_idx = id.x;
+    let first_du = mcu_idx * metadata.dus_per_mcu;
+
     let mcu_coord = vec2(
         mcu_idx % metadata.width_mcus,
         mcu_idx / metadata.width_mcus,
@@ -82,26 +62,38 @@ fn mcu_buffer_flush(mcu_idx: u32) {
     );
 
     let top_left = mcu_coord * mcu_size;
-    for (var y = 0u; y < mcu_size.y; y++) {
-        for (var x = 0u; x < mcu_size.x; x++) {
-            let coord = vec2(x, y);
 
-            // FIXME: the computation is hardcoded to my specific JPEGs, it should be made more flexible
+    for (var yblock = 0u; yblock < metadata.max_vsample; yblock++) {
+        for (var xblock = 0u; xblock < metadata.max_hsample; xblock++) {
+            for (var ypix = 0u; ypix < 8u; ypix++) {
+                // Load the 8-pixel rows of each DU for this Y coordinate.
+                let luma_row = read_du(first_du + xblock, ypix);
+                let cb_row = read_du(first_du + 2u, ypix);
+                let cr_row = read_du(first_du + 3u, ypix);
 
-            let chroma_x = x / 2u;
-            let c_word = u32(x > 3u);
-            let cb = (mcu_buffer[2u].pixels[y][c_word] >> ((x & 3u) * 8u)) & 0xffu;
-            let cr = (mcu_buffer[3u].pixels[y][c_word] >> ((x & 3u) * 8u)) & 0xffu;
+                for (var x = 0u; x < 8u; x++) {
+                    let coord = vec2(xblock * 8u + x, yblock * 8u + ypix);
 
-            let du = u32(x > 7u);
-            let x = x % 8u;
-            let word = u32(x > 3u);
-            let luma = (mcu_buffer[du].pixels[y][word] >> ((x & 3u) * 8u)) & 0xffu;
+                    // FIXME: the computation is hardcoded to my specific JPEGs, it should be made more flexible
 
-            let rgb = ycbcr2rgb(luma, cb, cr);
-            textureStore(out, top_left + coord, vec4(rgb, 0xffu));
+                    let word = u32(x > 3u);
+                    let cb = (cb_row[word] >> ((x & 3u) * 8u)) & 0xffu;
+                    let cr = (cr_row[word] >> ((x & 3u) * 8u)) & 0xffu;
+                    let luma = (luma_row[word] >> ((x & 3u) * 8u)) & 0xffu;
+
+                    let rgb = ycbcr2rgb(luma, cb, cr);
+                    textureStore(out, top_left + coord, vec4(rgb, 0xffu));
+                }
+            }
         }
     }
+}
+
+fn read_du(du: u32, y: u32) -> vec2<u32> {
+    return vec2(
+        u32(coefficients[du * 64u + y * 2u + 0u]),
+        u32(coefficients[du * 64u + y * 2u + 1u]),
+    );
 }
 
 fn ycbcr2rgb(y_: u32, cb_: u32, cr_: u32) -> vec3<u32> {
