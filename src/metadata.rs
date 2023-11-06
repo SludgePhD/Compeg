@@ -33,4 +33,11 @@ pub struct Metadata {
     /// Max `Vi` of all the components.
     pub max_vsample: u32,
     pub dus_per_mcu: u32,
+    /// Number of decoded DCT coefficients we write to VRAM.
+    ///
+    /// If this is 64, *all* coefficients are retained, which uses a lot of VRAM and is relatively
+    /// slow.
+    pub retained_coefficients: u32,
 }
+
+pub const DEFAULT_RETAINED_COEFFICIENTS: u32 = 32;

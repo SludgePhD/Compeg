@@ -27,4 +27,5 @@ struct Metadata {
     max_hsample: u32,
     max_vsample: u32,
     dus_per_mcu: u32,
+    retained_coefficients: u32,
 }

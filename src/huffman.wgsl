@@ -152,7 +152,7 @@ fn huffman(
 
             for (var v_samp = 0u; v_samp < metadata.components[comp].vsample; v_samp++) {
                 for (var h_samp = 0u; h_samp < metadata.components[comp].hsample; h_samp++) {
-                    let start_offset = du_index * 64u;
+                    let start_offset = du_index * metadata.retained_coefficients;
 
                     // Decode 1 data unit.
                     var decoded = array<i32, 64>();
@@ -191,7 +191,9 @@ fn huffman(
                         consume(ssss);
 
                         let coeff = huff_extend(val, ssss);
-                        coefficients[start_offset + pos] = coeff * dequant(qtable, pos);
+                        if pos < metadata.retained_coefficients {
+                            coefficients[start_offset + pos] = coeff * dequant(qtable, pos);
+                        }
                     }
 
                     du_index++;

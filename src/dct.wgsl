@@ -57,7 +57,7 @@ fn dct(
     }
 
     // This DU's start offset into `coefficients`:
-    let global_offset = du * 64u;
+    let global_offset = du * metadata.retained_coefficients;
     // This DU's start offset in `ws`:
     let local_offset = local / THREADS_PER_DCT * 64u;
 
@@ -77,7 +77,9 @@ fn dct(
     for (var row = 0u; row < DCT_SIZE; row++) {
         let mul = scale[row] * scale[col];
         let i = zigzag(row * DCT_SIZE + col);
-        inputs[row] = f32(coefficients[global_offset + i]) * mul;
+        if i < metadata.retained_coefficients {
+            inputs[row] = f32(coefficients[global_offset + i]) * mul;
+        }
     }
 
     // Now use the inputs for this column to compute its IDCT, writing the result to `ws`.
@@ -259,7 +261,7 @@ fn finalize(
 
     // Each thread composites one row of an MCU, and is responsible for loading one row of each DU.
     for (var i = 0u; i < metadata.dus_per_mcu; i++) {
-        let du_offset = (global_du + i) * 64u;
+        let du_offset = (global_du + i) * metadata.retained_coefficients;
         let data = vec2(
             u32(coefficients[du_offset + row * 2u + 0u]),
             u32(coefficients[du_offset + row * 2u + 1u]),

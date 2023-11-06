@@ -381,7 +381,8 @@ impl Decoder {
             self.huffman_l2.write(data.huffman_tables.l2_data());
 
             // Reserve space for the decoded coefficients. There are 64 32-bit values per data unit.
-            self.coefficients.reserve(4 * 64 * u64::from(total_dus));
+            self.coefficients
+                .reserve(4 * u64::from(data.metadata.retained_coefficients) * u64::from(total_dus));
         });
 
         let metadata_bg = self
@@ -770,6 +771,7 @@ impl<'a> ImageData<'a> {
             max_hsample,
             max_vsample,
             dus_per_mcu,
+            retained_coefficients: metadata::DEFAULT_RETAINED_COEFFICIENTS,
         };
 
         let huffman_tables = HuffmanTables::new(huffman_tables);

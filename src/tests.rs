@@ -137,6 +137,7 @@ fn test_compare() {
     compare(&[0, 0, 0], &[0, 0, 0, 0], 1, 1).unwrap();
     compare(&[0, 0, 0], &[ABS_TOLERANCE, 0, 0, 0], 1, 1).unwrap();
     compare(&[ABS_TOLERANCE, 0, 0], &[0, 0, 0, 0], 1, 1).unwrap();
+    compare(&[ABS_TOLERANCE, 0, 0], &[ABS_TOLERANCE, 0, 0, 0], 1, 1).unwrap();
     compare(&[ABS_TOLERANCE + 1, 0, 0], &[0, 0, 0, 0], 1, 1).unwrap_err();
     compare(&[0, 0, 0], &[ABS_TOLERANCE + 1, 0, 0, 0], 1, 1).unwrap_err();
 
