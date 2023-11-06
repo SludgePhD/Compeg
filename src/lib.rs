@@ -18,6 +18,9 @@ mod huffman;
 mod metadata;
 mod scan;
 
+#[cfg(test)]
+mod tests;
+
 use std::{
     borrow::Cow,
     mem,
