@@ -280,21 +280,29 @@ fn finalize(
     );
 
     let top_left = mcu_coord * mcu_size;
-    for (var mcu_x = 0u; mcu_x < mcu_size.x; mcu_x++) {
-        let coord = top_left + vec2(mcu_x, row);
+    for (var col = 0u; col < mcu_size.x; col++) {
+        let coord = top_left + vec2(col, row);
 
-        let luma_du = mcu_x / 8u;
-        let cb_du = 2u;
-        let cr_du = 3u;
+        var du_offset = 0u;  // DU index where each component starts.
+        var components = vec4<u32>();
+        for (var comp = 0u; comp < 3u; comp++) {
+            let du = du_offset + col * metadata.components[comp].hsample / mcu_size.x;
 
-        let du_x = mcu_x & 7u;
-        let word_x = u32(du_x > 3u);
-        let shift = (du_x & 7u) * 8u;
-        var luma = databuf[local_mcu].du[luma_du].rows[row][word_x] >> shift;
-        var cb = databuf[local_mcu].du[cb_du].rows[row][word_x] >> shift;
-        var cr = databuf[local_mcu].du[cr_du].rows[row][word_x] >> shift;
+            // Adjust the rate we sample the sub-sampled components at correctly:
+            let xscale = metadata.max_hsample / metadata.components[comp].hsample;
+            let yscale = metadata.max_vsample / metadata.components[comp].vsample;
+            let x = col / xscale;
+            let y = row / yscale;
 
-        let rgb = ycbcr2rgb(luma & 0xffu, cb & 0xffu, cr & 0xffu);
+            let word = u32((x & 7u) > 3u);
+            let shift = (x & 7u) * 8u;
+
+            components[comp] = databuf[local_mcu].du[du].rows[y][word] >> shift;
+
+            du_offset += metadata.components[comp].hsample * metadata.components[comp].vsample;
+        }
+
+        let rgb = ycbcr2rgb(components[0] & 0xffu, components[1] & 0xffu, components[2] & 0xffu);
         textureStore(out, coord, vec4(f32(rgb.r) / 255.0, f32(rgb.g) / 255.0, f32(rgb.b) / 255.0, 1.0));
     }
 }
