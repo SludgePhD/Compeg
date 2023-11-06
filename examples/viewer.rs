@@ -28,6 +28,7 @@ struct Frame {
 fn main() -> anyhow::Result<()> {
     env_logger::builder()
         .filter_module(env!("CARGO_PKG_NAME"), log::LevelFilter::Trace)
+        .filter_module(env!("CARGO_CRATE_NAME"), log::LevelFilter::Trace)
         .parse_default_env()
         .init();
 
@@ -199,6 +200,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         multiview: None,
     });
 
+    let mut win_width = win.inner_size().width;
+    let mut win_height = win.inner_size().height;
     let mut bindgroup = None;
     ev.run(move |event, target| match event {
         Event::UserEvent(()) => win.request_redraw(),
@@ -208,6 +211,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                     match surface.get_current_texture() {
                         Ok(tex) => break tex,
                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                            let surface_conf = surface
+                                .get_default_config(&adapter, win_width, win_height)
+                                .expect("incompatible surface, despite requiring one");
+                            log::info!("reconfiguring surface: {win_width}x{win_height}");
                             surface.configure(&device, &surface_conf);
                         }
                         Err(e) => {
@@ -277,6 +284,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                 st.present();
             }
             WindowEvent::CloseRequested => target.exit(),
+            WindowEvent::Resized(size) => {
+                win_width = size.width;
+                win_height = size.height;
+
+                let surface_conf = surface
+                    .get_default_config(&adapter, win_width, win_height)
+                    .expect("incompatible surface, despite requiring one");
+                log::info!("reconfiguring surface after window resize: {win_width}x{win_height}");
+                surface.configure(&device, &surface_conf);
+            }
             _ => {}
         },
         _ => {}
