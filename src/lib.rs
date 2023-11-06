@@ -42,7 +42,7 @@ use crate::{
 #[doc(hidden)]
 pub use scan::ScanBuffer;
 
-const OUTPUT_FORMAT: TextureFormat = TextureFormat::Rgba8Uint;
+const OUTPUT_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
 const HUFFMAN_WORKGROUP_SIZE: u32 = 64;
 
@@ -319,7 +319,10 @@ impl Decoder {
         let output = DynamicTexture::new(
             gpu.clone(),
             "output",
-            TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC | TextureUsages::COPY_DST,
+            TextureUsages::STORAGE_BINDING
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC
+                | TextureUsages::COPY_DST,
             OUTPUT_FORMAT,
         );
 
@@ -432,6 +435,12 @@ impl Decoder {
             dct_workgroups * DCT_WORKGROUP_SIZE,
             total_mcus,
             total_dus,
+        );
+        log::trace!(
+            "dispatching {} workgroups for compositing ({} shader invocations; {} MCUs)",
+            finalize_workgroups,
+            finalize_workgroups * FINALIZE_WORKGROUP_SIZE,
+            total_mcus,
         );
 
         let buffer = enc.finish();
@@ -607,7 +616,7 @@ impl<'a> ImageData<'a> {
                             }
                             if u.Hi() != v.Hi() || u.Vi() != v.Vi() || u.Hi() != 1 || u.Vi() != 1 {
                                 bail!(
-                                    "invalid U/V sampling factors {}x{} and {}x{}",
+                                    "invalid U/V sampling factors {}x{} and {}x{} (expected 1x1)",
                                     u.Hi(),
                                     u.Vi(),
                                     v.Hi(),
@@ -711,10 +720,9 @@ impl<'a> ImageData<'a> {
         let (
             Some((width, height)),
             Some(components),
-            Some(ri),
             Some((scan_data_offset, scan_data_len)),
-        ) = (size, components, ri, scan_data) else {
-            bail!("missing DRI/SOS/SOI marker");
+        ) = (size, components, scan_data) else {
+            bail!("missing SOS/SOI marker");
         };
 
         let dus_per_mcu = components
@@ -727,9 +735,13 @@ impl<'a> ImageData<'a> {
         let max_vsample = components.iter().map(|c| c.Vi()).max().unwrap().into();
         let width_dus = u32::from((width + 7) / 8);
         let height_dus = u32::from((height + 7) / 8);
-        let width_mcus = width_dus / max_hsample;
-        let height_mcus = height_dus / max_vsample;
+        let width_mcus = (width_dus + max_hsample - 1) / max_hsample; // (round up)
+        let height_mcus = (height_dus + max_vsample - 1) / max_vsample; // (round up)
 
+        log::trace!("max Hi={} Vi={}", max_hsample, max_vsample);
+        log::trace!("width={width} height={height} width_dus={width_dus} height_dus={height_dus} width_mcus={width_mcus} height_mcus={height_mcus}");
+
+        let ri = ri.unwrap_or(height_mcus * width_mcus);
         let total_restart_intervals = height_mcus * width_mcus / ri;
 
         if total_restart_intervals > Decoder::MAX_RESTART_INTERVALS {

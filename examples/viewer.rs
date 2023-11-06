@@ -9,7 +9,11 @@ use std::{
 use anyhow::bail;
 use compeg::{Decoder, Gpu, ImageData};
 use linuxvideo::format::{PixFormat, PixelFormat};
-use wgpu::{Backends, InstanceDescriptor};
+use wgpu::{
+    Backends, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutEntry, ColorTargetState,
+    ColorWrites, InstanceDescriptor, PipelineLayoutDescriptor, RenderPipelineDescriptor,
+    ShaderStages, TextureFormat, TextureViewDescriptor, VertexState,
+};
 use winit::{
     dpi::PhysicalSize,
     event::{Event, WindowEvent},
@@ -101,23 +105,101 @@ fn main() -> anyhow::Result<()> {
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default(), None))?;
     let (device, queue) = (Arc::new(device), Arc::new(queue));
 
-    let mut conf = surface
+    let mut surface_conf = surface
         .get_default_config(&adapter, width, height)
         .expect("incompatible surface, despite requiring one");
-    conf.usage |= wgpu::TextureUsages::COPY_DST;
-    surface.configure(&device, &conf);
+    surface_conf.usage |= wgpu::TextureUsages::COPY_DST;
+    surface.configure(&device, &surface_conf);
 
     let gpu = Gpu::from_wgpu(device.clone(), queue.clone())?;
     let mut decoder = Decoder::new(Arc::new(gpu));
 
-    let stride = width * 4; // RGBA texture
-    let scratch = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("scratch"),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
-        size: u64::from(stride) * u64::from(height),
-        mapped_at_creation: false,
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(
+            r#"
+@group(0) @binding(0)
+var in_texture: texture_2d<f32>;
+@group(0) @binding(1)
+var in_sampler: sampler;
+
+struct VertexOutput {
+    @builtin(position)
+    position: vec4<f32>,
+    @location(0)
+    uv: vec2<f32>,
+}
+
+@vertex
+fn vertex(
+    @builtin(vertex_index) vertex_index: u32
+) -> VertexOutput {
+    // Logic copied from bevy's fullscreen quad shader
+    var out: VertexOutput;
+    out.uv = vec2<f32>(f32(vertex_index >> 1u), f32(vertex_index & 1u)) * 2.0;
+    out.position = vec4<f32>(out.uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);
+    return out;
+}
+
+@fragment
+fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(in_texture, in_sampler, in.uv);
+}
+"#
+            .into(),
+        ),
+    });
+    let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[
+            BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            BindGroupLayoutEntry {
+                binding: 1,
+                visibility: ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                count: None,
+            },
+        ],
+    });
+    let sampler = device.create_sampler(&Default::default());
+    let pipe_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[&bgl],
+        push_constant_ranges: &[],
+    });
+    let pipe = device.create_render_pipeline(&RenderPipelineDescriptor {
+        label: None,
+        layout: Some(&pipe_layout),
+        vertex: VertexState {
+            module: &shader,
+            entry_point: "vertex",
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: "fragment",
+            targets: &[Some(ColorTargetState {
+                format: surface_conf.format,
+                blend: None,
+                write_mask: ColorWrites::all(),
+            })],
+        }),
+        multiview: None,
     });
 
+    let mut bindgroup = None;
     ev.run(move |event, target| match event {
         Event::UserEvent(()) => win.request_redraw(),
         Event::WindowEvent { event, .. } => match event {
@@ -126,7 +208,7 @@ fn main() -> anyhow::Result<()> {
                     match surface.get_current_texture() {
                         Ok(tex) => break tex,
                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                            surface.configure(&device, &conf);
+                            surface.configure(&device, &surface_conf);
                         }
                         Err(e) => {
                             eprintln!("fatal error: {e}");
@@ -145,23 +227,51 @@ fn main() -> anyhow::Result<()> {
                 };
                 let decode_op = decoder.decode_blocking(&image);
 
+                if decode_op.texture_changed() {
+                    // Recreate bind group.
+                    bindgroup = Some(device.create_bind_group(&BindGroupDescriptor {
+                        label: None,
+                        layout: &bgl,
+                        entries: &[
+                            BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(
+                                    &decode_op.texture().create_view(&TextureViewDescriptor {
+                                        format: Some(TextureFormat::Rgba8UnormSrgb),
+                                        ..Default::default()
+                                    }),
+                                ),
+                            },
+                            BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&sampler),
+                            },
+                        ],
+                    }))
+                }
+
                 let mut enc =
                     device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-                let copy_size = wgpu::Extent3d {
-                    width: image.width(),
-                    height: image.height(),
-                    depth_or_array_layers: 1,
-                };
-                let icb = wgpu::ImageCopyBuffer {
-                    buffer: &scratch,
-                    layout: wgpu::ImageDataLayout {
-                        offset: 0,
-                        bytes_per_row: Some(stride),
-                        rows_per_image: None,
-                    },
-                };
-                enc.copy_texture_to_buffer(decode_op.texture().as_image_copy(), icb, copy_size);
-                enc.copy_buffer_to_texture(icb, st.texture.as_image_copy(), copy_size);
+                let view = st.texture.create_view(&Default::default());
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_pipeline(&pipe);
+                pass.set_bind_group(0, bindgroup.as_ref().unwrap(), &[]);
+                pass.draw(0..3, 0..1);
+                drop(pass);
+
                 queue.submit([enc.finish()]);
 
                 st.present();

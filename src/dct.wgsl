@@ -2,7 +2,7 @@
 
 @group(1) @binding(0) var<storage, read_write> coefficients: array<i32>;
 
-@group(2) @binding(0) var out: texture_storage_2d<rgba8uint, write>;
+@group(2) @binding(0) var out: texture_storage_2d<rgba8unorm, write>;
 
 // DCT is always performed on 8x8 blocks.
 const DCT_SIZE = 8u;
@@ -74,9 +74,8 @@ fn dct(
     var scale = SCALE;
 
     let col = lane;
-    let col_scale = scale[col];
     for (var row = 0u; row < DCT_SIZE; row++) {
-        let mul = scale[row] * col_scale;
+        let mul = scale[row] * scale[col];
         let i = zigzag(row * DCT_SIZE + col);
         inputs[row] = f32(coefficients[global_offset + i]) * mul;
     }
@@ -296,7 +295,7 @@ fn finalize(
         var cr = databuf[local_mcu].du[cr_du].rows[row][word_x] >> shift;
 
         let rgb = ycbcr2rgb(luma & 0xffu, cb & 0xffu, cr & 0xffu);
-        textureStore(out, coord, vec4(rgb, 0xffu));
+        textureStore(out, coord, vec4(f32(rgb.r) / 255.0, f32(rgb.g) / 255.0, f32(rgb.b) / 255.0, 1.0));
     }
 }
 

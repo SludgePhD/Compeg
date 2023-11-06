@@ -191,7 +191,7 @@ impl DynamicTexture {
             dimension: TextureDimension::D2,
             format,
             usage,
-            view_formats: &[],
+            view_formats: &[format.add_srgb_suffix(), format.remove_srgb_suffix()],
         });
         let view = texture.create_view(&TextureViewDescriptor {
             label: Some(&name),
@@ -233,7 +233,10 @@ impl DynamicTexture {
                 dimension: TextureDimension::D2,
                 format: self.texture.format(),
                 usage: self.texture.usage(),
-                view_formats: &[],
+                view_formats: &[
+                    self.texture.format().add_srgb_suffix(),
+                    self.texture.format().remove_srgb_suffix(),
+                ],
             });
             self.view = self.texture.create_view(&TextureViewDescriptor {
                 label: Some(&self.name),
