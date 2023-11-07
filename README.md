@@ -1,18 +1,12 @@
 This is an experiment to use WebGPU Compute Shaders to decode JPEG images.
+The main Purpose of this project is to learn how to write compute shaders.
 
-It works remarkably well on my RX 6700 XT, with frame times of around 13ms
-(2ms spent doing preprocessing on the CPU, around 10ms spent on the GPU). This
-beats all of mozjpeg, jpeg-decoder, and zune-jpeg. Even a very multithreaded and
-very specifically patched version of zune-jpeg only manages 17ms frame times on
-my workstation.
+It performs surprisingly well on my RX 6700 XT, with GPU times of around 4-5ms
+(and 2ms spent doing preprocessing on the CPU) when decoding a 4k test image.
 
-Unfortunately, Intel's iGPUs are, apparently, 10-20x worse at this, so the
-machine I wanted to use this on ended up with 100-200ms frame times, which,
-to put it mildly, is "not very good".
+The approach used here is restricted to baseline JPEGs that make heavy use
+of restart intervals. These types of JPEGs are typically produced by hardware
+encoders in GPUs, phones and webcams.
 
-The quest for faster JPEGs continues.
-
-Addendum: according to the official technical specifications, the RX 6700 XT
-does indeed have a pixel/texture fill rate that is about 10-20x higher than what
-the 12th gen Intel iGPU (UHD Graphics 770) is advertised as, so the numbers seem
-to check out.
+Due to technical limitations, only YUV JPEGs that make use of 4:2:2 chroma
+subsampling are supported. In the future this restriction may be lifted.

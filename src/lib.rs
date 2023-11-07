@@ -799,6 +799,16 @@ impl<'a> ImageData<'a> {
         self.height.into()
     }
 
+    /// Returns the total parallelism this JPEG permits.
+    ///
+    /// This number indicates how many parts of the image can be processed in parallel. It is
+    /// crucial for performance that this number is as high as possible. If it is below 10000, it is
+    /// likely faster to use a CPU-based decoder instead.
+    #[inline]
+    pub fn parallelism(&self) -> u32 {
+        self.metadata.total_restart_intervals
+    }
+
     fn scan_data(&self) -> &[u8] {
         &self.jpeg[self.scan_data_offset..][..self.scan_data_len]
     }
