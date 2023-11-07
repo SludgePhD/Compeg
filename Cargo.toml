@@ -3,6 +3,8 @@ name = "compeg"
 version = "0.1.0"
 edition = "2021"
 license = "0BSD"
+description = "A JPEG decoder implemented as a WebGPU compute shader"
+repository = "https://github.com/SludgePhD/Compeg"
 
 [dependencies]
 wgpu = "0.18.0"
