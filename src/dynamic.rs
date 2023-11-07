@@ -212,6 +212,10 @@ impl DynamicTexture {
         }
     }
 
+    pub fn into_texture(self) -> Texture {
+        self.texture
+    }
+
     /// Ensures that the texture can store at least `width x height` texels.
     pub fn reserve(&mut self, width: u32, height: u32) -> bool {
         if width > self.texture.size().width || height > self.texture.size().height {

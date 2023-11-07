@@ -1,6 +1,6 @@
 [package]
 name = "compeg"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "0BSD"
 description = "A JPEG decoder implemented as a WebGPU compute shader"

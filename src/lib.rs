@@ -353,6 +353,15 @@ impl Decoder {
         }
     }
 
+    /// Consumes this [`Decoder`] and returns its output [`Texture`].
+    ///
+    /// The [`Texture`] will only contain data if a decode operation has been previously started on
+    /// this [`Decoder`]. Depending on what data has been decoded previously, the [`Texture`] might
+    /// have larger dimensions than necessary to fit the *last* frame.
+    pub fn into_texture(self) -> Texture {
+        self.output.into_texture()
+    }
+
     /// Preprocesses and uploads a JPEG image, and dispatches the decoding operation on the GPU.
     ///
     /// Returns a [`DecodeOp`] with information about the decode operation.
