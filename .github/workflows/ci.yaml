@@ -1,0 +1,79 @@
+name: CI/CD
+on: [pull_request, push]
+
+env:
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+  CARGO_INCREMENTAL: 0
+  CI: 1
+  RUST_BACKTRACE: short
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  ci:
+    name: CI
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: windows-latest
+            target: x86_64-pc-windows-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: "[Linux] Install Vulkan driver"
+      if: ${{ startsWith(matrix.os, 'ubuntu') }}
+      run: |
+        sudo apt-get update
+        sudo apt install -y libegl1-mesa libgl1-mesa-dri libxcb-xfixes0-dev mesa-vulkan-drivers
+
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: Install Rust toolchain
+      run: rustup install stable --profile=minimal
+
+    - name: Install Rust target
+      run: rustup target add ${{ matrix.target }}
+
+    - name: Install CI/CD tooling
+      run: cargo install sludge-cicd --debug
+
+    - name: Run CI/CD
+      run: sludge-cicd --target ${{ matrix.target }}
+      # NB: no token, this should only run tests
+
+  cd:
+    name: Autopublish
+    needs: ci
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write  # pushes tags to the repo
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: Install Rust toolchain
+      run: rustup install stable --profile=minimal
+
+    - name: Install CI/CD tooling
+      run: cargo install sludge-cicd --debug
+
+    - name: Run CI/CD
+      run: sludge-cicd
+      env:
+        CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
