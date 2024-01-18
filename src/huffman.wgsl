@@ -211,6 +211,6 @@ fn dequant(qtable: u32, index: u32) -> i32 {
 
 // Performs the `Huff_extend` procedure from the specification.
 fn huff_extend(v: i32, t: u32) -> i32 {
-    let vt = 1 << (t - 1u);
-    return select(v, v + (-1 << t) + 1, v < vt);
+    let vt = i32(1) << (t - 1);
+    return select(v, v + (i32(-1) << t) + 1, v < vt);
 }

@@ -87,9 +87,11 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    let win = WindowBuilder::new()
-        .with_inner_size(PhysicalSize::new(width, height))
-        .build(&ev)?;
+    let win = Arc::new(
+        WindowBuilder::new()
+            .with_inner_size(PhysicalSize::new(width, height))
+            .build(&ev)?,
+    );
 
     let instance = wgpu::Instance::new(InstanceDescriptor {
         // The OpenGL backend panics spuriously, and segfaults when dropping the `Device`, so don't
@@ -97,7 +99,7 @@ fn main() -> anyhow::Result<()> {
         backends: Backends::PRIMARY,
         ..Default::default()
     });
-    let surface = unsafe { instance.create_surface(&win)? };
+    let surface = instance.create_surface(win.clone())?;
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         compatible_surface: Some(&surface),
         ..Default::default()
