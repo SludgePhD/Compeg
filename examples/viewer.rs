@@ -234,9 +234,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                         process::exit(1);
                     }
                 };
-                let decode_op = decoder.decode_blocking(&image);
 
-                if decode_op.texture_changed() {
+                let mut enc =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                let texture_changed = decoder.enqueue(&image, &mut enc);
+
+                if texture_changed {
                     // Recreate bind group.
                     bindgroup = Some(device.create_bind_group(&BindGroupDescriptor {
                         label: None,
@@ -245,7 +248,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                             BindGroupEntry {
                                 binding: 0,
                                 resource: wgpu::BindingResource::TextureView(
-                                    &decode_op.texture().create_view(&TextureViewDescriptor {
+                                    &decoder.texture().create_view(&TextureViewDescriptor {
                                         format: Some(TextureFormat::Rgba8UnormSrgb),
                                         ..Default::default()
                                     }),
@@ -259,8 +262,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                     }))
                 }
 
-                let mut enc =
-                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
                 let view = st.texture.create_view(&Default::default());
                 let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: None,
@@ -285,6 +286,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
                 st.present();
             }
+            WindowEvent::MouseWheel { .. } => win.request_redraw(),
             WindowEvent::CloseRequested => target.exit(),
             WindowEvent::Resized(size) => {
                 win_width = size.width;

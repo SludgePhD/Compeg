@@ -353,6 +353,10 @@ impl Decoder {
         }
     }
 
+    pub fn texture(&self) -> &Texture {
+        self.output.texture()
+    }
+
     /// Consumes this [`Decoder`] and returns its output [`Texture`].
     ///
     /// The [`Texture`] will only contain data if a decode operation has been previously started on
@@ -362,10 +366,7 @@ impl Decoder {
         self.output.into_texture()
     }
 
-    /// Preprocesses and uploads a JPEG image, and dispatches the decoding operation on the GPU.
-    ///
-    /// Returns a [`DecodeOp`] with information about the decode operation.
-    pub fn start_decode(&mut self, data: &ImageData<'_>) -> DecodeOp<'_> {
+    pub fn enqueue(&mut self, data: &ImageData<'_>, enc: &mut CommandEncoder) -> bool {
         let texture_changed = self.output.reserve(data.width(), data.height());
 
         let total_restart_intervals = data.metadata.total_restart_intervals;
@@ -408,10 +409,6 @@ impl Decoder {
             .bind_group(&[self.coefficients.as_resource()]);
         let output_bg = self.output_bg.bind_group(&[self.output.as_resource()]);
 
-        let mut enc = self
-            .gpu
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor::default());
         enc.clear_buffer(self.coefficients.buffer(), 0, None);
 
         let mut compute = enc.begin_compute_pass(&ComputePassDescriptor::default());
@@ -456,13 +453,27 @@ impl Decoder {
             total_mcus,
         );
 
-        let buffer = enc.finish();
-        let submission = self.gpu.queue.submit([buffer]);
-
         log::trace!(
             "t_preprocess={t_preprocess:?}, \
             t_enqueue_writes={t_enqueue_writes:?}"
         );
+
+        texture_changed
+    }
+
+    /// Preprocesses and uploads a JPEG image, and dispatches the decoding operation on the GPU.
+    ///
+    /// Returns a [`DecodeOp`] with information about the decode operation.
+    pub fn start_decode(&mut self, data: &ImageData<'_>) -> DecodeOp<'_> {
+        let mut enc = self
+            .gpu
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor::default());
+
+        let texture_changed = self.enqueue(data, &mut enc);
+
+        let buffer = enc.finish();
+        let submission = self.gpu.queue.submit([buffer]);
 
         DecodeOp {
             submission,
