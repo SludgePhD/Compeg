@@ -127,9 +127,15 @@ fn check(jpg: &str, png: &str) {
 }
 
 #[test]
-fn reftests() {
+fn reftests_4_2_2() {
     check("64x8-Ri-1.jpg", "64x8.png");
     check("64x8-Ri-2.jpg", "64x8.png");
+}
+
+#[test]
+#[ignore = "non-4:2:2 subsampling is not yet implemented"]
+fn reftests_4_4_4() {
+    check("64x8-Hi1-Vi1.jpg", "64x8.png");
 }
 
 #[test]

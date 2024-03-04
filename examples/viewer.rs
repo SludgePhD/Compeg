@@ -82,7 +82,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         _ => {
-            eprintln!("usage: viewer <file.jpeg>");
+            eprintln!("usage: viewer <file.jpg>");
             process::exit(1);
         }
     };
@@ -215,7 +215,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                             let surface_conf = surface
                                 .get_default_config(&adapter, win_width, win_height)
-                                .expect("incompatible surface, despite requiring one");
+                                .expect("incompatible surface, despite requesting one");
                             log::info!("reconfiguring surface: {win_width}x{win_height}");
                             surface.configure(&device, &surface_conf);
                         }

@@ -199,6 +199,17 @@ fn dct(
 
     coefficients[global_offset + y * 2u + 0u] = i32(rowdata[0]);
     coefficients[global_offset + y * 2u + 1u] = i32(rowdata[1]);
+
+    // FIXME: instead of doing compositing in another pass, use a subset of the DCT threads to do it
+    // saves a trip to memory, since all the decoded YCbCr pixels are already in LDS.
+    // requires the DCT workgroup size to be a multiple of the number of DUs per MCU, since a
+    // workgroup barrier needs to be used before we start compositing the MCU
+    // 1x1 subsampling: 3 DUs per MCU
+    // 1x2 subsampling: 2 Luma DUs + 2 Chroma DUs = 4 DUs per MCU
+    // 2x2 subsampling: 4 Luma DUs + 2 Chroma DUs = 6 DUs per MCU
+    // workgroup size should be a multiple of 64, so at most 6*64 = 384
+    // min. supported max. workgroup size per dimension is 256 on WebGPU, so we need to use 2 dimensions to reach 384
+    // fix one to 64, make the other dim. the "DUs per MCU" value?
 }
 
 /////////////////
