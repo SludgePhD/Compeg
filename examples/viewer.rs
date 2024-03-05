@@ -4,6 +4,7 @@ use std::{
     process,
     sync::{Arc, Mutex},
     thread,
+    time::Instant,
 };
 
 use anyhow::bail;
@@ -11,8 +12,8 @@ use compeg::{Decoder, Gpu, ImageData};
 use linuxvideo::format::{PixFormat, PixelFormat};
 use wgpu::{
     Backends, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutEntry, ColorTargetState,
-    ColorWrites, InstanceDescriptor, PipelineLayoutDescriptor, RenderPipelineDescriptor,
-    ShaderStages, TextureFormat, TextureViewDescriptor, VertexState,
+    ColorWrites, InstanceDescriptor, MaintainBase, PipelineLayoutDescriptor,
+    RenderPipelineDescriptor, ShaderStages, TextureFormat, TextureViewDescriptor, VertexState,
 };
 use winit::{
     dpi::PhysicalSize,
@@ -282,7 +283,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                 pass.draw(0..3, 0..1);
                 drop(pass);
 
-                queue.submit([enc.finish()]);
+                let idx = queue.submit([enc.finish()]);
+
+                let start = Instant::now();
+                device.poll(MaintainBase::WaitForSubmissionIndex(idx));
+                log::trace!("t_poll={:?}", start.elapsed());
 
                 st.present();
             }

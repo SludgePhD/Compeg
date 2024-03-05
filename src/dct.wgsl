@@ -208,8 +208,7 @@ fn dct(
     // 1x2 subsampling: 2 Luma DUs + 2 Chroma DUs = 4 DUs per MCU
     // 2x2 subsampling: 4 Luma DUs + 2 Chroma DUs = 6 DUs per MCU
     // workgroup size should be a multiple of 64, so at most 6*64 = 384
-    // min. supported max. workgroup size per dimension is 256 on WebGPU, so we need to use 2 dimensions to reach 384
-    // fix one to 64, make the other dim. the "DUs per MCU" value?
+    // min. supported max. total workgroup size is 256 on WebGPU, however :<
 }
 
 /////////////////
