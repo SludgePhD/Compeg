@@ -200,15 +200,19 @@ fn dct(
     coefficients[global_offset + y * 2u + 0u] = i32(rowdata[0]);
     coefficients[global_offset + y * 2u + 1u] = i32(rowdata[1]);
 
-    // FIXME: instead of doing compositing in another pass, use a subset of the DCT threads to do it
+    // FIXME: instead of doing compositing in another pass, use a subset of the DCT threads to do it.
     // saves a trip to memory, since all the decoded YCbCr pixels are already in LDS.
     // requires the DCT workgroup size to be a multiple of the number of DUs per MCU, since a
     // workgroup barrier needs to be used before we start compositing the MCU
     // 1x1 subsampling: 3 DUs per MCU
     // 1x2 subsampling: 2 Luma DUs + 2 Chroma DUs = 4 DUs per MCU
     // 2x2 subsampling: 4 Luma DUs + 2 Chroma DUs = 6 DUs per MCU
-    // workgroup size should be a multiple of 64, so at most 6*64 = 384
+    // workgroup size should be a multiple of 64, naively at most 6*64 = 384
     // min. supported max. total workgroup size is 256 on WebGPU, however :<
+    // -> compute the least common multiple instead for a tighter bound
+    // however the workgroup size must be a multiple of 8 * "DUs per MCU" since we need 8 threads per DCT job
+    // JPEG spec says Hi and Vi can be up to 4 for each component, and there can be up to 4 components,
+    // but we only handle JFIF with YCbCr
 }
 
 /////////////////

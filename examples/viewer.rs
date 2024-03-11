@@ -106,6 +106,10 @@ fn main() -> anyhow::Result<()> {
         ..Default::default()
     }))
     .ok_or_else(|| anyhow::anyhow!("no compatible graphics adapter found"))?;
+
+    let limits = adapter.limits();
+    log::info!("adapter limits: {limits:?}");
+
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default(), None))?;
     let (device, queue) = (Arc::new(device), Arc::new(queue));
 

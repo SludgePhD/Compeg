@@ -289,6 +289,10 @@ impl Decoder {
 
     /// Creates a new JPEG decoding context on the given [`Gpu`].
     pub fn new(gpu: Arc<Gpu>) -> Self {
+        Self::with_texture_usages(gpu, TextureUsages::empty())
+    }
+
+    pub fn with_texture_usages(gpu: Arc<Gpu>, usage: TextureUsages) -> Self {
         let metadata = gpu.device.create_buffer(&BufferDescriptor {
             label: Some("metadata"),
             size: mem::size_of::<metadata::Metadata>() as u64,
@@ -325,7 +329,8 @@ impl Decoder {
             TextureUsages::STORAGE_BINDING
                 | TextureUsages::TEXTURE_BINDING
                 | TextureUsages::COPY_SRC
-                | TextureUsages::COPY_DST,
+                | TextureUsages::COPY_DST
+                | usage,
             OUTPUT_FORMAT,
         );
 
