@@ -214,6 +214,11 @@ impl Gpu {
                 },
             ],
         });
+        let opts = PipelineCompilationOptions {
+            // wgpu's zero init code is pretty suboptimal, so turn it off. We don't need it anyways.
+            zero_initialize_workgroup_memory: false,
+            ..Default::default()
+        };
         let huffman_decode_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
             label: Some("huffman_decode_pipeline"),
             layout: Some(&device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -223,6 +228,7 @@ impl Gpu {
             })),
             module: &huffman,
             entry_point: "huffman",
+            compilation_options: opts.clone(),
         });
         let dct_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
             label: Some("dct_pipeline"),
@@ -233,6 +239,7 @@ impl Gpu {
             })),
             module: &dct,
             entry_point: "dct",
+            compilation_options: opts.clone(),
         });
         let finalize_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
             label: Some("finalize_pipeline"),
@@ -243,6 +250,7 @@ impl Gpu {
             })),
             module: &dct,
             entry_point: "finalize",
+            compilation_options: opts.clone(),
         });
 
         Ok(Self {

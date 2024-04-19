@@ -7,7 +7,7 @@ description = "A JPEG decoder implemented as a WebGPU compute shader"
 repository = "https://github.com/SludgePhD/Compeg"
 
 [dependencies]
-wgpu = "0.19.0"
+wgpu = "0.19.3"
 bytemuck = { version = "1.13.1", features = ["derive", "min_const_generics"] }
 log = "0.4.19"
 
@@ -26,3 +26,6 @@ criterion = { version = "0.5.1", default-features = false }
 [[bench]]
 name = "bench"
 harness = false
+
+[patch.crates-io]
+wgpu = { git = "https://github.com/gfx-rs/wgpu.git", rev = "54d22a89d33421cce0eae1255aeec9eabbb9ac8e" }

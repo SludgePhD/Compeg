@@ -113,10 +113,9 @@ fn main() -> anyhow::Result<()> {
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default(), None))?;
     let (device, queue) = (Arc::new(device), Arc::new(queue));
 
-    let mut surface_conf = surface
+    let surface_conf = surface
         .get_default_config(&adapter, width, height)
         .expect("incompatible surface, despite requiring one");
-    surface_conf.usage |= wgpu::TextureUsages::COPY_DST;
     surface.configure(&device, &surface_conf);
 
     let gpu = Gpu::from_wgpu(device.clone(), queue.clone())?;
@@ -191,6 +190,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             module: &shader,
             entry_point: "vertex",
             buffers: &[],
+            compilation_options: Default::default(),
         },
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
@@ -203,6 +203,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                 blend: None,
                 write_mask: ColorWrites::all(),
             })],
+            compilation_options: Default::default(),
         }),
         multiview: None,
     });
