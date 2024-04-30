@@ -19,7 +19,7 @@ use winit::{
     dpi::PhysicalSize,
     event::{Event, WindowEvent},
     event_loop::EventLoop,
-    window::WindowBuilder,
+    window::Window,
 };
 
 struct Frame {
@@ -88,11 +88,10 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    let win = Arc::new(
-        WindowBuilder::new()
-            .with_inner_size(PhysicalSize::new(width, height))
-            .build(&ev)?,
-    );
+    #[allow(deprecated)]
+    let win = Arc::new(ev.create_window(
+        Window::default_attributes().with_inner_size(PhysicalSize::new(width, height)),
+    )?);
 
     let instance = wgpu::Instance::new(InstanceDescriptor {
         // The OpenGL backend panics spuriously, and segfaults when dropping the `Device`, so don't
@@ -211,6 +210,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let mut win_width = win.inner_size().width;
     let mut win_height = win.inner_size().height;
     let mut bindgroup = None;
+    #[allow(deprecated)]
     ev.run(move |event, target| match event {
         Event::UserEvent(()) => win.request_redraw(),
         Event::WindowEvent { event, .. } => match event {
