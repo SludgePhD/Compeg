@@ -135,6 +135,7 @@ fn reftests_4_2_2() {
 #[test]
 #[ignore = "non-4:2:2 subsampling is not yet implemented"]
 fn reftests_4_4_4() {
+    // FIXME: this test passes when uncommenting some checks in lib.rs, but the functionality is not implemented yet!
     check("64x8-Hi1-Vi1.jpg", "64x8.png");
 }
 

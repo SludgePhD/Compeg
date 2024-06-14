@@ -244,9 +244,6 @@ struct McuBuf {
 // 64 * DUS_PER_MCU bytes per MCU
 // (256 Bytes for 4 DUs/MCU)
 
-// We choose the number of MCUs processed per workgroup so that we end up at a "reasonable" amount
-// of LDS usage, like 16 KB (GCN has 32K). This ends up at 64 MCUs per workgroup.
-
 // Each thread composites one MCU row.
 const THREADS_PER_MCU = MCU_HEIGHT;
 
