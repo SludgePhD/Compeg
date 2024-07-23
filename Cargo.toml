@@ -1,13 +1,13 @@
 [package]
 name = "compeg"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "0BSD"
 description = "A JPEG decoder implemented as a WebGPU compute shader"
 repository = "https://github.com/SludgePhD/Compeg"
 
 [dependencies]
-wgpu = "0.20.0"
+wgpu = "22"
 bytemuck = { version = "1.13.1", features = ["derive", "min_const_generics"] }
 log = "0.4.19"
 

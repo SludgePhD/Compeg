@@ -229,6 +229,7 @@ impl Gpu {
             module: &huffman,
             entry_point: "huffman",
             compilation_options: opts.clone(),
+            cache: None,
         });
         let dct_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
             label: Some("dct_pipeline"),
@@ -240,6 +241,7 @@ impl Gpu {
             module: &dct,
             entry_point: "dct",
             compilation_options: opts.clone(),
+            cache: None,
         });
         let finalize_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
             label: Some("finalize_pipeline"),
@@ -251,6 +253,7 @@ impl Gpu {
             module: &dct,
             entry_point: "finalize",
             compilation_options: opts.clone(),
+            cache: None,
         });
 
         Ok(Self {

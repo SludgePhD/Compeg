@@ -205,6 +205,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             compilation_options: Default::default(),
         }),
         multiview: None,
+        cache: None,
     });
 
     let mut win_width = win.inner_size().width;
