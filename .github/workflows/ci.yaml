@@ -5,7 +5,6 @@ env:
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
   CARGO_INCREMENTAL: 0
-  CI: 1
   RUST_BACKTRACE: short
   RUSTFLAGS: -D warnings
   RUSTDOCFLAGS: -D warnings
@@ -45,7 +44,8 @@ jobs:
 
     - name: Run CI/CD
       run: sludge-cicd --target ${{ matrix.target }}
-      # NB: no token, this should only run tests
+      env:
+        CICD_SKIP_DOCS: 1  # docs are unfathomably slow to build
 
   cd:
     name: Autopublish
@@ -73,3 +73,4 @@ jobs:
       env:
         CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         CICD_CHECK_ONLY: 1  # full tests are run in the `ci` job
+        CICD_SKIP_DOCS: 1   # docs are unfathomably slow to build
