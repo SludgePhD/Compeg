@@ -76,7 +76,7 @@ pub struct Gpu {
 impl Gpu {
     /// Opens a suitable default GPU.
     pub async fn open() -> Result<Self> {
-        let instance = Instance::new(InstanceDescriptor {
+        let instance = Instance::new(&InstanceDescriptor {
             // The OpenGL backend panics spuriously, so don't enable it.
             backends: Backends::PRIMARY,
             ..Default::default()
@@ -227,7 +227,7 @@ impl Gpu {
                 push_constant_ranges: &[],
             })),
             module: &huffman,
-            entry_point: "huffman",
+            entry_point: Some("huffman"),
             compilation_options: opts.clone(),
             cache: None,
         });
@@ -239,7 +239,7 @@ impl Gpu {
                 push_constant_ranges: &[],
             })),
             module: &dct,
-            entry_point: "dct",
+            entry_point: Some("dct"),
             compilation_options: opts.clone(),
             cache: None,
         });
@@ -251,7 +251,7 @@ impl Gpu {
                 push_constant_ranges: &[],
             })),
             module: &dct,
-            entry_point: "finalize",
+            entry_point: Some("finalize"),
             compilation_options: opts.clone(),
             cache: None,
         });

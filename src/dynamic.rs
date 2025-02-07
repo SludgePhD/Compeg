@@ -195,13 +195,7 @@ impl DynamicTexture {
         });
         let view = texture.create_view(&TextureViewDescriptor {
             label: Some(&name),
-            format: None,
-            dimension: None,
-            aspect: TextureAspect::All,
-            base_mip_level: 0,
-            mip_level_count: None,
-            base_array_layer: 0,
-            array_layer_count: None,
+            ..Default::default()
         });
         Self {
             texture,

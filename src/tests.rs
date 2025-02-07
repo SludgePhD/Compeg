@@ -9,7 +9,8 @@ use std::{fs::File, sync::Arc};
 
 use anyhow::{bail, ensure, Context};
 use wgpu::{
-    BufferDescriptor, BufferUsages, Extent3d, ImageCopyBuffer, ImageCopyTexture, ImageDataLayout,
+    BufferDescriptor, BufferUsages, Extent3d, TexelCopyBufferInfo, TexelCopyBufferLayout,
+    TexelCopyTextureInfo,
 };
 
 use crate::{Gpu, ImageData};
@@ -50,15 +51,15 @@ fn check_impl(jpg: &str, png_reference: &str) -> anyhow::Result<()> {
 
     let mut enc = gpu.device.create_command_encoder(&Default::default());
     enc.copy_texture_to_buffer(
-        ImageCopyTexture {
+        TexelCopyTextureInfo {
             texture: op.texture(),
             mip_level: 0,
             origin: Default::default(),
             aspect: Default::default(),
         },
-        ImageCopyBuffer {
+        TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: ImageDataLayout {
+            layout: TexelCopyBufferLayout {
                 bytes_per_row: Some(width * 4),
                 ..Default::default()
             },

@@ -93,7 +93,7 @@ fn main() -> anyhow::Result<()> {
         Window::default_attributes().with_inner_size(PhysicalSize::new(width, height)),
     )?);
 
-    let instance = wgpu::Instance::new(InstanceDescriptor {
+    let instance = wgpu::Instance::new(&InstanceDescriptor {
         // The OpenGL backend panics spuriously, and segfaults when dropping the `Device`, so don't
         // enable it.
         backends: Backends::PRIMARY,
@@ -187,7 +187,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         layout: Some(&pipe_layout),
         vertex: VertexState {
             module: &shader,
-            entry_point: "vertex",
+            entry_point: Some("vertex"),
             buffers: &[],
             compilation_options: Default::default(),
         },
@@ -196,7 +196,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: "fragment",
+            entry_point: Some("fragment"),
             targets: &[Some(ColorTargetState {
                 format: surface_conf.format,
                 blend: None,
