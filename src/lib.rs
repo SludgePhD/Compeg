@@ -84,11 +84,11 @@ impl Gpu {
         let adapter = instance
             .request_adapter(&RequestAdapterOptions::default())
             .await
-            .ok_or_else(|| Error::from("no supported graphics adapter found"))?;
+            .map_err(|e| Error::from(e.to_string()))?;
         let (device, queue) = adapter
-            .request_device(&Default::default(), None)
+            .request_device(&Default::default())
             .await
-            .map_err(|_| Error::from("no supported graphics device found"))?;
+            .map_err(|e| Error::from(e.to_string()))?;
 
         let info = adapter.get_info();
         log::info!(

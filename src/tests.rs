@@ -78,7 +78,8 @@ fn check_impl(jpg: &str, png_reference: &str) -> anyhow::Result<()> {
         .map_async(wgpu::MapMode::Read, Result::unwrap);
 
     gpu.device
-        .poll(wgpu::MaintainBase::WaitForSubmissionIndex(index));
+        .poll(wgpu::MaintainBase::WaitForSubmissionIndex(index))
+        .unwrap();
 
     let map = buffer.slice(..).get_mapped_range();
 
