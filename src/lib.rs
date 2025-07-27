@@ -516,7 +516,7 @@ impl Decoder {
         let t_poll = time(|| {
             self.gpu
                 .device
-                .poll(MaintainBase::WaitForSubmissionIndex(submission.clone()))
+                .poll(PollType::WaitForSubmissionIndex(submission.clone()))
         });
 
         log::trace!("t_poll={:?}", t_poll);

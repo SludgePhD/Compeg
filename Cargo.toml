@@ -7,7 +7,7 @@ description = "A JPEG decoder implemented as a WebGPU compute shader"
 repository = "https://github.com/SludgePhD/Compeg"
 
 [dependencies]
-wgpu = "25"
+wgpu = "26.0.1"
 bytemuck = { version = "1.13.1", features = ["derive", "min_const_generics"] }
 log = "0.4.19"
 

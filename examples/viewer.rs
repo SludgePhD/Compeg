@@ -12,8 +12,8 @@ use compeg::{Decoder, Gpu, ImageData};
 use linuxvideo::format::{PixFormat, PixelFormat};
 use wgpu::{
     Backends, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutEntry, ColorTargetState,
-    ColorWrites, InstanceDescriptor, MaintainBase, PipelineLayoutDescriptor,
-    RenderPipelineDescriptor, ShaderStages, TextureFormat, TextureViewDescriptor, VertexState,
+    ColorWrites, InstanceDescriptor, PipelineLayoutDescriptor, PollType, RenderPipelineDescriptor,
+    ShaderStages, TextureFormat, TextureViewDescriptor, VertexState,
 };
 use winit::{
     dpi::PhysicalSize,
@@ -278,6 +278,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                             load: wgpu::LoadOp::Load,
                             store: wgpu::StoreOp::Store,
                         },
+                        depth_slice: None,
                     })],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
@@ -291,9 +292,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                 let idx = queue.submit([enc.finish()]);
 
                 let start = Instant::now();
-                device
-                    .poll(MaintainBase::WaitForSubmissionIndex(idx))
-                    .unwrap();
+                device.poll(PollType::WaitForSubmissionIndex(idx)).unwrap();
                 log::trace!("t_poll={:?}", start.elapsed());
 
                 st.present();
