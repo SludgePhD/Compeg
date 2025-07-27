@@ -1,21 +1,21 @@
+use std::hint::black_box;
+
 use compeg::ScanBuffer;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use divan::counter::BytesCount;
 
-fn criterion_benchmark(c: &mut Criterion) {
-    c.benchmark_group("scan-preprocessing")
-        .throughput(criterion::Throughput::Bytes(
-            include_bytes!("scan.dat").len() as u64,
-        ))
-        .bench_function("scan.dat", |b| {
-            let mut buf = ScanBuffer::new();
-
-            b.iter(move || {
-                buf.process(black_box(include_bytes!("scan.dat")), 42876)
-                    .unwrap();
-                buf.processed_scan_data().last().copied()
-            })
-        });
+fn main() {
+    divan::main();
 }
 
-criterion_group!(benches, criterion_benchmark);
-criterion_main!(benches);
+#[divan::bench]
+fn scan(benchar: divan::Bencher) {
+    let scan = include_bytes!("scan.dat");
+
+    let mut buf = ScanBuffer::new();
+    benchar
+        .counter(BytesCount::new(scan.len()))
+        .bench_local(|| {
+            buf.process(black_box(scan), 42876).unwrap();
+            buf.processed_scan_data().last().copied()
+        });
+}
